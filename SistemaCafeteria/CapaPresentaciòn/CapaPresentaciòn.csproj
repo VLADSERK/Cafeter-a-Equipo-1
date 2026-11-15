@@ -12,4 +12,10 @@
     <ProjectReference Include="..\CapaLogica\CapaLogica.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Assets\logo_cafeteria.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
