@@ -219,6 +219,7 @@ namespace CapaPresentaciòn.Formularios
             }
 
             // PRUEBA VISUAL TEMPORAL (aquí se conectará ServicioSeguridad de CapaLogica)
+            // PRUEBA VISUAL TEMPORAL (aquí se conectará ServicioSeguridad de CapaLogica)
             if (usuario == "admin" && contrasena == "123456")
             {
                 _lblError.Visible = false;
@@ -231,11 +232,13 @@ namespace CapaPresentaciòn.Formularios
             else if (usuario == "cajero" && contrasena == "123456")
             {
                 _lblError.Visible = false;
-                MessageBox.Show(
-                    "Acceso correcto como Barista/Cajero.\nAquí se abrirá FrmPrincipalOperativo.",
-                    "Vista previa de diseño",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                FrmPrincipalOperativo ventanaCajero = new FrmPrincipalOperativo();
+                Hide();
+                ventanaCajero.ShowDialog();
+
+                // Al pulsar el botón rojo "salir" en la Pantalla 2.0, regresa al Login limpio
+                _txtContrasena.Texto = string.Empty;
+                Show();
             }
             else
             {
