@@ -211,24 +211,29 @@ namespace CapaPresentaciòn.Formularios
             string usuario = _txtUsuario.Texto.Trim();
             string contrasena = _txtContrasena.Texto;
 
-            // Validación visual básica antes de llamar a CapaLogica (RIU-08)
+            // Validación visual básica antes de continuar (RIU-08)
             if (string.IsNullOrEmpty(usuario) || string.IsNullOrEmpty(contrasena))
             {
                 MostrarErrorCredenciales("*Usuario o contraseña incorrectos");
                 return;
             }
 
-            // PRUEBA VISUAL TEMPORAL (aquí se conectará ServicioSeguridad de CapaLogica)
-            // PRUEBA VISUAL TEMPORAL (aquí se conectará ServicioSeguridad de CapaLogica)
+            // 1. Acceso como Administrador
             if (usuario == "admin" && contrasena == "123456")
             {
                 _lblError.Visible = false;
-                MessageBox.Show(
-                    "Acceso correcto como Administrador.\nAquí se abrirá FrmPrincipalAdmin.",
-                    "Vista previa de diseño",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                FrmPrincipalAdmin ventanaAdmin = new FrmPrincipalAdmin();
+                Hide();
+                ventanaAdmin.ShowDialog();
+
+                // Al cerrar sesión en el panel de administrador, regresa al login limpio
+                _txtUsuario.Texto = string.Empty;
+                _txtContrasena.Texto = string.Empty;
+                _txtUsuario.TieneError = false;
+                _txtContrasena.TieneError = false;
+                Show();
             }
+            // 2. Acceso como Cajero
             else if (usuario == "cajero" && contrasena == "123456")
             {
                 _lblError.Visible = false;
@@ -236,8 +241,11 @@ namespace CapaPresentaciòn.Formularios
                 Hide();
                 ventanaCajero.ShowDialog();
 
-                // Al pulsar el botón rojo "salir" en la Pantalla 2.0, regresa al Login limpio
+                // Al cerrar sesión en el panel del cajero, regresa al login limpio
+                _txtUsuario.Texto = string.Empty;
                 _txtContrasena.Texto = string.Empty;
+                _txtUsuario.TieneError = false;
+                _txtContrasena.TieneError = false;
                 Show();
             }
             else
