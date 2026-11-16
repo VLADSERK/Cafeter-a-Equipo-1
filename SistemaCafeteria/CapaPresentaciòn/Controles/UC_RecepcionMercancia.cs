@@ -1,14 +1,26 @@
-﻿using CapaPresentaciòn.Estilos;
-using CapaPresentacion.Estilos;
+﻿using CapaEntidades;
+using CapaLogica;
+using CapaPresentaciòn.Estilos;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.Linq;
 using System.Windows.Forms;
+using CapaPresentacion.Estilos;
 
 namespace CapaPresentaciòn.Controles
 {
     public partial class UC_RecepcionMercancia : UserControl
     {
+        private readonly InventarioNegocio _invNegocio = new();
+        private readonly CultureInfo _culturaMxn = CultureInfo.GetCultureInfo("es-MX");
+
+        private List<Insumo> _insumosDisponibles = new();
+        private List<Proveedor> _proveedoresDisponibles = new();
+        private List<UnidadMedida> _unidadesDisponibles = new();
+
         private Panel _pnlTopBar = null!;
         private Label _lblRuta = null!;
         private Label _lblTitulo = null!;
@@ -42,7 +54,7 @@ namespace CapaPresentaciòn.Controles
         {
             InitializeComponent();
             ConfigurarInterfazRecepcion();
-            ActualizarVistaPreviaLote();
+            InicializarLogicaMysql();
         }
 
         private void ConfigurarInterfazRecepcion()
@@ -123,7 +135,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblFechaOperativaValor = new Label
             {
-                Text = DateTime.Now.ToString("dd 'de' MMMM 'de' yyyy"),
+                Text = DateTime.Now.ToString("dd 'de' MMMM 'de' yyyy", _culturaMxn),
                 Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(16, 26),
@@ -199,32 +211,6 @@ namespace CapaPresentaciòn.Controles
                 Height = 36
             };
 
-            _cmbInsumo.Items.Add("Seleccionar insumo...");
-            foreach (var insumo in CatalogoInsumosMock.ListaIngredientes)
-            {
-                _cmbInsumo.Items.Add(insumo.Nombre);
-            }
-            _cmbInsumo.SelectedIndex = 0;
-
-            // Al elegir un ingrediente, selecciona automáticamente su unidad de medida correcta
-            _cmbInsumo.SelectedIndexChanged += (s, e) =>
-            {
-                if (_cmbInsumo.SelectedIndex <= 0) return;
-                string nombreSel = _cmbInsumo.SelectedItem?.ToString() ?? "";
-                var insumo = CatalogoInsumosMock.ListaIngredientes.Find(i => i.Nombre == nombreSel);
-                if (insumo != null)
-                {
-                    for (int idx = 0; idx < _cmbUnidad.Items.Count; idx++)
-                    {
-                        if (_cmbUnidad.Items[idx]?.ToString()?.Contains($"({insumo.UnidadDefault})") == true)
-                        {
-                            _cmbUnidad.SelectedIndex = idx;
-                            break;
-                        }
-                    }
-                }
-            };
-
             Label lblProveedor = CrearEtiquetaCampo("Proveedor *", 320, 78);
             _cmbProveedor = new ComboBox
             {
@@ -234,15 +220,6 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(320, 102),
                 Height = 36
             };
-            _cmbProveedor.Items.AddRange(new object[]
-            {
-                "Seleccionar proveedor...",
-                "Tostadores del Sur S.A.",
-                "Lácteos La Pradera",
-                "Insumos Barista México",
-                "Distribuidora Dulce Aroma"
-            });
-            _cmbProveedor.SelectedIndex = 0;
 
             // Fila 2: Cantidad inicial * | Unidad de medida
             Label lblCantidad = CrearEtiquetaCampo("Cantidad inicial *", 26, 158);
@@ -265,7 +242,6 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(12, 10),
                 Height = 24
             };
-            _txtCantidad.TextChanged += (s, e) => CalcularCostoEstimado();
 
             _lblUnidadSufijo = new Label
             {
@@ -284,24 +260,6 @@ namespace CapaPresentaciòn.Controles
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Location = new Point(320, 182),
                 Height = 36
-            };
-            _cmbUnidad.Items.AddRange(new object[]
-            {
-                "Kilogramos (kg)",
-                "Gramos (g)",
-                "Litros (L)",
-                "Mililitros (ml)",
-                "Piezas (pz)"
-            });
-            _cmbUnidad.SelectedIndex = 0;
-            _cmbUnidad.SelectedIndexChanged += (s, e) =>
-            {
-                string sel = _cmbUnidad.SelectedItem?.ToString() ?? "";
-                if (sel.Contains("(kg)")) _lblUnidadSufijo.Text = "kg";
-                else if (sel.Contains("(g)")) _lblUnidadSufijo.Text = "g";
-                else if (sel.Contains("(L)")) _lblUnidadSufijo.Text = "L";
-                else if (sel.Contains("(ml)")) _lblUnidadSufijo.Text = "ml";
-                else _lblUnidadSufijo.Text = "pz";
             };
 
             // Fila 3: Costo unitario * | Costo estimado
@@ -334,7 +292,6 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(30, 10),
                 Height = 24
             };
-            _txtCostoUnitario.TextChanged += (s, e) => CalcularCostoEstimado();
 
             Label lblMxn1 = new Label
             {
@@ -364,6 +321,7 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(12, 10),
                 AutoSize = true
             };
+
             Label lblMxn2 = new Label
             {
                 Name = "lblMxn2",
@@ -385,7 +343,6 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(26, 350),
                 Height = 36
             };
-            _dtpRecepcion.ValueChanged += (s, e) => ActualizarVistaPreviaLote();
 
             Label lblFechaCad = CrearEtiquetaCampo("Fecha de caducidad *", 320, 326);
             _dtpCaducidad = new DateTimePicker
@@ -474,7 +431,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblCodigoLote = new Label
             {
-                Text = "LOT-INS-20261115-001",
+                Text = "LOT-INS-20261116-001",
                 Font = new Font("Consolas", 13.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(10, 34),
@@ -488,7 +445,6 @@ namespace CapaPresentaciòn.Controles
                 Size = new Size(220, 56),
                 BackColor = Color.Transparent
             };
-            _picCodigoBarras.Paint += DibujarCodigoBarrasSimulado;
 
             pnlBarcodeBox.Controls.AddRange(new Control[] { lblIdTitulo, _lblCodigoLote, _picCodigoBarras });
 
@@ -544,7 +500,6 @@ namespace CapaPresentaciòn.Controles
                 Cursor = Cursors.Hand
             };
             _btnCancelar.FlatAppearance.BorderSize = 0;
-            _btnCancelar.Click += (s, e) => LimpiarFormulario();
 
             _btnConfirmar = new Button
             {
@@ -557,7 +512,6 @@ namespace CapaPresentaciòn.Controles
                 Cursor = Cursors.Hand
             };
             _btnConfirmar.FlatAppearance.BorderSize = 0;
-            _btnConfirmar.Click += BtnConfirmar_Click;
 
             _barraAcciones.Controls.AddRange(new Control[] { _btnCancelar, _btnConfirmar });
         }
@@ -574,50 +528,156 @@ namespace CapaPresentaciòn.Controles
             };
         }
 
-        private void CalcularCostoEstimado()
+        // =========================================================================
+        // LÓGICA CONECTADA A MYSQL (CAPA NEGOCIO / CAPA DATOS)
+        // =========================================================================
+
+        private void InicializarLogicaMysql()
         {
-            if (decimal.TryParse(_txtCantidad.Text, out decimal cantidad) &&
-                decimal.TryParse(_txtCostoUnitario.Text, out decimal costoUnit))
+            CargarCatalogosDesdeMysql();
+
+            _cmbInsumo.SelectedIndexChanged += (s, e) => ActualizarVistaPreviaLote();
+            _dtpRecepcion.ValueChanged += (s, e) =>
             {
-                decimal total = cantidad * costoUnit;
-                _lblCostoEstimadoValor.Text = $"$ {total:N2}";
+                _lblFechaOperativaValor.Text = _dtpRecepcion.Value.ToString("dd 'de' MMMM 'de' yyyy", _culturaMxn);
+                ActualizarVistaPreviaLote();
+            };
+
+            _txtCantidad.TextChanged += (s, e) => RecalcularCostoEstimado();
+            _txtCostoUnitario.TextChanged += (s, e) => RecalcularCostoEstimado();
+
+            _picCodigoBarras.Paint += PicCodigoBarras_Paint;
+
+            _btnCancelar.Click += (s, e) => LimpiarFormulario();
+            _btnConfirmar.Click += BtnConfirmar_Click;
+
+            ActualizarVistaPreviaLote();
+            RecalcularCostoEstimado();
+        }
+
+        private void CargarCatalogosDesdeMysql()
+        {
+            try
+            {
+                _invNegocio.AsegurarDatosInicialesInventario();
+
+                _insumosDisponibles = _invNegocio
+                    .ObtenerResumenInventarioCompleto()
+                    .Select(r => r.Insumo)
+                    .ToList();
+
+                _proveedoresDisponibles = _invNegocio.ObtenerProveedores();
+                _unidadesDisponibles = _invNegocio.ObtenerUnidades();
+
+                _cmbInsumo.DataSource = null;
+                _cmbInsumo.DisplayMember = "Nombre";
+                _cmbInsumo.ValueMember = "IdInsumo";
+                _cmbInsumo.DataSource = _insumosDisponibles;
+                _cmbInsumo.SelectedIndex = -1;
+
+                _cmbProveedor.DataSource = null;
+                _cmbProveedor.DisplayMember = "Nombre";
+                _cmbProveedor.ValueMember = "IdProveedor";
+                _cmbProveedor.DataSource = _proveedoresDisponibles;
+                _cmbProveedor.SelectedIndex = -1;
+
+                _cmbUnidad.DataSource = null;
+                _cmbUnidad.DisplayMember = "Nombre";
+                _cmbUnidad.ValueMember = "IdUnidad";
+                _cmbUnidad.DataSource = _unidadesDisponibles;
+                _cmbUnidad.SelectedIndex = -1;
+                _cmbUnidad.Enabled = false;
             }
-            else
+            catch (Exception ex)
             {
-                _lblCostoEstimadoValor.Text = "$ 0.00";
+                MessageBox.Show(
+                    $"No se pudieron cargar los catálogos de MySQL:\n{ex.Message}",
+                    "Error de conexión",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 
         private void ActualizarVistaPreviaLote()
         {
-            string fechaCodigo = _dtpRecepcion.Value.ToString("yyyyMMdd");
-            _lblCodigoLote.Text = $"LOT-INS-{fechaCodigo}-001";
+            var insumoSel = _cmbInsumo.SelectedItem as Insumo;
+
+            if (insumoSel != null)
+            {
+                _lblUnidadSufijo.Text = insumoSel.UnidadAbreviatura;
+                var unidadMatch = _unidadesDisponibles.FirstOrDefault(u => u.IdUnidad == insumoSel.IdUnidad);
+                if (unidadMatch != null)
+                    _cmbUnidad.SelectedItem = unidadMatch;
+            }
+            else
+            {
+                _lblUnidadSufijo.Text = "ud";
+                _cmbUnidad.SelectedIndex = -1;
+            }
+
+            _lblCodigoLote.Text = _invNegocio.GenerarVistaPreviaCodigoLote(insumoSel, _dtpRecepcion.Value);
             _picCodigoBarras.Invalidate();
         }
 
-        private void DibujarCodigoBarrasSimulado(object? sender, PaintEventArgs e)
+        private void RecalcularCostoEstimado()
         {
-            int[] patronAnchos = { 3, 1, 2, 4, 1, 2, 1, 3, 2, 1, 4, 1, 2, 3, 1, 2, 2, 1, 3, 1, 2, 4, 1, 2, 1, 3, 2, 1, 3, 2 };
-            int x = 8;
+            string cantTexto = _txtCantidad.Text.Replace("$", "").Trim();
+            string costoTexto = _txtCostoUnitario.Text.Replace("$", "").Trim();
+
+            decimal.TryParse(cantTexto, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cantidad);
+            decimal.TryParse(costoTexto, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal costoUnitario);
+
+            decimal totalEstimado = Math.Round(cantidad * costoUnitario, 2);
+            _lblCostoEstimadoValor.Text = $"$ {totalEstimado:N2}";
+        }
+
+        private void PicCodigoBarras_Paint(object? sender, PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.None;
+            g.Clear(Color.White);
+
+            string codigo = string.IsNullOrWhiteSpace(_lblCodigoLote.Text)
+                ? "LOT-INS-000"
+                : _lblCodigoLote.Text.Trim();
+
+            int anchoDisp = _picCodigoBarras.Width - 24;
+            int altoBarra = _picCodigoBarras.Height - 10;
+            int x = 12;
+
             using var brocha = new SolidBrush(TemaCafeteria.TextoOscuro);
 
-            for (int i = 0; i < patronAnchos.Length && x < _picCodigoBarras.Width - 10; i++)
+            // Barras de guarda inicial
+            g.FillRectangle(brocha, x, 5, 2, altoBarra); x += 4;
+            g.FillRectangle(brocha, x, 5, 1, altoBarra); x += 4;
+
+            foreach (char c in codigo)
             {
-                int ancho = patronAnchos[i];
-                if (i % 2 == 0)
+                int valor = c;
+                for (int bit = 0; bit < 4; bit++)
                 {
-                    e.Graphics.FillRectangle(brocha, x, 2, ancho, _picCodigoBarras.Height - 6);
+                    if (x >= anchoDisp) break;
+                    int grosor = ((valor >> bit) & 1) == 1 ? 3 : 1;
+                    g.FillRectangle(brocha, x, 5, grosor, altoBarra);
+                    x += grosor + (((valor >> (bit + 1)) & 1) == 1 ? 3 : 2);
                 }
-                x += ancho + 2;
+            }
+
+            // Barras de guarda final
+            if (x + 6 <= _picCodigoBarras.Width - 6)
+            {
+                g.FillRectangle(brocha, x, 5, 1, altoBarra); x += 3;
+                g.FillRectangle(brocha, x, 5, 2, altoBarra);
             }
         }
 
         private void LimpiarFormulario()
         {
-            _cmbInsumo.SelectedIndex = 0;
-            _cmbProveedor.SelectedIndex = 0;
+            _cmbInsumo.SelectedIndex = -1;
+            _cmbProveedor.SelectedIndex = -1;
+            _cmbUnidad.SelectedIndex = -1;
             _txtCantidad.Clear();
-            _cmbUnidad.SelectedIndex = 0;
             _txtCostoUnitario.Clear();
             _lblCostoEstimadoValor.Text = "$ 0.00";
             _dtpRecepcion.Value = DateTime.Now;
@@ -627,14 +687,22 @@ namespace CapaPresentaciòn.Controles
 
         private void BtnConfirmar_Click(object? sender, EventArgs e)
         {
-            if (_cmbInsumo.SelectedIndex <= 0 || _cmbProveedor.SelectedIndex <= 0)
+            if (_cmbInsumo.SelectedItem is not Insumo insumoSel)
             {
-                MessageBox.Show("Selecciona un insumo y un proveedor válidos.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Selecciona un insumo válido.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _cmbInsumo.Focus();
                 return;
             }
 
-            if (!decimal.TryParse(_txtCantidad.Text, out decimal cant) || cant <= 0 ||
-                !decimal.TryParse(_txtCostoUnitario.Text, out decimal costo) || costo <= 0)
+            if (_cmbProveedor.SelectedItem is not Proveedor provSel)
+            {
+                MessageBox.Show("Selecciona un proveedor válido.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _cmbProveedor.Focus();
+                return;
+            }
+
+            if (!decimal.TryParse(_txtCantidad.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cant) || cant <= 0 ||
+                !decimal.TryParse(_txtCostoUnitario.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal costo) || costo <= 0)
             {
                 MessageBox.Show("Ingresa una cantidad inicial y un costo unitario mayores a cero.", "Validación de datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
@@ -646,15 +714,36 @@ namespace CapaPresentaciòn.Controles
                 return;
             }
 
+            string codigoLote = _lblCodigoLote.Text.Trim();
+            string codigoBarras = codigoLote.Replace("-", "");
+
+            var resultado = _invNegocio.RegistrarEntregaProveedor(
+                idProveedor: provSel.IdProveedor,
+                idInsumo: insumoSel.IdInsumo,
+                cantidadRecibida: cant,
+                costoUnitario: costo,
+                fechaCaducidad: _dtpCaducidad.Value.Date,
+                codigoLoteManual: codigoLote,
+                codigoBarrasManual: codigoBarras,
+                observaciones: $"Recepción de {provSel.Nombre} ({cant} {insumoSel.UnidadAbreviatura})"
+            );
+
+            if (!resultado.Exito)
+            {
+                MessageBox.Show(resultado.Mensaje, "Error al registrar en MySQL", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
             MessageBox.Show(
-                $"Recepción registrada correctamente.\n\n" +
-                $"• Lote generado: {_lblCodigoLote.Text}\n" +
-                $"• Insumo: {_cmbInsumo.SelectedItem}\n" +
-                $"• Cantidad: {cant} {_lblUnidadSufijo.Text}\n" +
+                $"{resultado.Mensaje}\n\n" +
+                $"• Insumo: {insumoSel.Nombre}\n" +
+                $"• Proveedor: {provSel.Nombre}\n" +
+                $"• Cantidad: {cant} {insumoSel.UnidadAbreviatura}\n" +
                 $"• Costo Total: {_lblCostoEstimadoValor.Text} MXN",
                 "Existencias Actualizadas",
                 MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+                MessageBoxIcon.Information
+            );
 
             LimpiarFormulario();
         }

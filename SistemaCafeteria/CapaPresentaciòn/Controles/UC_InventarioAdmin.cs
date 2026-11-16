@@ -1,11 +1,12 @@
-﻿using System;
+﻿using CapaLogica;
+using CapaPresentacion.Estilos;
+using CapaPresentaciòn.Estilos;
+using System;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using CapaPresentacion.Estilos;
-using CapaPresentaciòn.Estilos;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
@@ -61,28 +62,46 @@ namespace CapaPresentaciòn.Controles.Admin
 
         private void CargarDatosIniciales()
         {
-            var lotesBase = CatalogoInsumosMock.ObtenerLotesIniciales();
-            string[] proveedores = { "Cafetalera del Sur S.A.", "Lácteos Alpura Mayoreo", "Distribuidora Azucarera MX", "Insumos Barista Pro" };
+            _lotesAdmin.Clear();
 
-            for (int i = 0; i < lotesBase.Count; i++)
+            try
             {
-                var l = lotesBase[i];
-                decimal cantInicial = Math.Round(l.CantidadActual * 1.25m, 2);
-                DateTime fechaRec = l.FechaCaducidad.AddDays(-25);
-                string prov = proveedores[i % proveedores.Length];
+                var invNegocio = new InventarioNegocio();
 
-                _lotesAdmin.Add(new LoteAdminViewModel(
-                    l.Insumo,
-                    l.Categoria,
-                    l.CodigoLote,
-                    fechaRec,
-                    l.FechaCaducidad,
-                    cantInicial,
-                    l.CantidadActual,
-                    l.StockMinimo,
-                    l.Unidad,
-                    prov
-                ));
+                // Inserta proveedores, insumos y lotes semilla en MySQL solo si la tabla Insumo está vacía
+                invNegocio.AsegurarDatosInicialesInventario();
+
+                // Obtiene todos los lotes activos ordenados por criterio PEPS (caducidad más próxima primero)
+                var lotesMysql = invNegocio.ObtenerLotesPeps(soloDisponibles: true);
+
+                foreach (var l in lotesMysql)
+                {
+                    // Como la tabla Insumo maneja StockMaximo, calculamos un umbral mínimo referencial (20%) para tu ViewModel
+                    decimal stockMinimoRef = Math.Round(l.StockMaximoInsumo * 0.20m, 2);
+                    DateTime fechaCad = l.FechaCaducidad ?? DateTime.Today.AddYears(1);
+
+                    _lotesAdmin.Add(new LoteAdminViewModel(
+                        l.NombreInsumo,
+                        "Insumos Almacén",
+                        l.CodigoLote,
+                        l.FechaRecepcion,
+                        fechaCad,
+                        l.CantidadInicial,
+                        l.CantidadDisponible,
+                        stockMinimoRef,
+                        l.UnidadAbreviatura,
+                        l.NombreProveedor
+                    ));
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"No se pudieron cargar los lotes desde MySQL:\n{ex.Message}",
+                    "Error de conexión",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 

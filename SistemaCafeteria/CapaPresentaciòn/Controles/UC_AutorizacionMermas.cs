@@ -5,27 +5,15 @@ using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
 using CapaPresentacion.Estilos;
+using CapaLogica;
+using CapaEntidades;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
     public partial class UC_AutorizacionMermas : UserControl
     {
-        private class SolicitudMermaMock
-        {
-            public string Folio { get; set; } = "";
-            public string Insumo { get; set; } = "";
-            public string Categoria { get; set; } = "";
-            public string CantidadTexto { get; set; } = "";
-            public string CodigoLote { get; set; } = "";
-            public string Motivo { get; set; } = "";
-            public decimal CostoEstimado { get; set; }
-            public string FechaRegistro { get; set; } = "";
-            public string ReportadoPor { get; set; } = "";
-            public string ObservacionesOperador { get; set; } = "";
-            public string PorcentajeLote { get; set; } = "";
-        }
-
-        private readonly List<SolicitudMermaMock> _solicitudesPendientes = new();
+        private readonly AutorizacionMermaNegocio _mermaNegocio = new();
+        private List<Merma> _solicitudesPendientes = new();
         private readonly CultureInfo _culturaMxn = CultureInfo.GetCultureInfo("es-MX");
 
         // Barra superior
@@ -49,87 +37,23 @@ namespace CapaPresentaciòn.Controles.Admin
 
         public UC_AutorizacionMermas()
         {
-           
-            CargarSolicitudesIniciales();
+          
             ConfigurarInterfaz();
-            ActualizarTablaYContadores();
+            CargarSolicitudesDesdeMysql();
         }
 
-        private void CargarSolicitudesIniciales()
+        private void CargarSolicitudesDesdeMysql()
         {
-            _solicitudesPendientes.AddRange(new[]
+            try
             {
-                new SolicitudMermaMock
-                {
-                    Folio = "MER-0105",
-                    Insumo = "Café arábica premium",
-                    Categoria = "Grano de café",
-                    CantidadTexto = "2.5 kg",
-                    CodigoLote = "CA-240614-A",
-                    Motivo = "Humedad detectada en almacén",
-                    CostoEstimado = 865.00m,
-                    FechaRegistro = "15 nov 2026, 09:42 h",
-                    ReportadoPor = "Carlos Méndez (Barista Turno Matutino)",
-                    PorcentajeLote = "25% del lote",
-                    ObservacionesOperador = "Bolsa de 2.5 kg presentó filtración de humedad en estante inferior de bodega seca."
-                },
-                new SolicitudMermaMock
-                {
-                    Folio = "MER-0104",
-                    Insumo = "Leche entera",
-                    Categoria = "Lácteos",
-                    CantidadTexto = "8 L",
-                    CodigoLote = "LE-120625-09",
-                    Motivo = "Caducidad próxima / cadena de frío",
-                    CostoEstimado = 248.00m,
-                    FechaRegistro = "15 nov 2026, 08:16 h",
-                    ReportadoPor = "Sofía Ramírez (Cajera / Barista)",
-                    PorcentajeLote = "32% del lote",
-                    ObservacionesOperador = "Envases próximos a vencer sin rotación suficiente durante el cierre nocturno."
-                },
-                new SolicitudMermaMock
-                {
-                    Folio = "MER-0103",
-                    Insumo = "Jarabe de vainilla",
-                    Categoria = "Saborizantes",
-                    CantidadTexto = "3 botellas",
-                    CodigoLote = "JV-0525-18",
-                    Motivo = "Envase dañado durante recepción",
-                    CostoEstimado = 447.00m,
-                    FechaRegistro = "14 nov 2026, 17:35 h",
-                    ReportadoPor = "Carlos Méndez (Barista Turno Vespertino)",
-                    PorcentajeLote = "30% del lote",
-                    ObservacionesOperador = "Caja golpeada al descargar pedido; tres botellas presentaron fisura en cuello."
-                },
-                new SolicitudMermaMock
-                {
-                    Folio = "MER-0102",
-                    Insumo = "Croissant de mantequilla",
-                    Categoria = "Panadería",
-                    CantidadTexto = "12 pzas",
-                    CodigoLote = "CM-130625-M",
-                    Motivo = "Producto fuera de estándar",
-                    CostoEstimado = 396.00m,
-                    FechaRegistro = "14 nov 2026, 16:08 h",
-                    ReportadoPor = "Sofía Ramírez (Cajera / Barista)",
-                    PorcentajeLote = "40% del lote",
-                    ObservacionesOperador = "Piezas con exceso de horneado no aptas para exhibición en vitrina."
-                },
-                new SolicitudMermaMock
-                {
-                    Folio = "MER-0101",
-                    Insumo = "Chocolate semiamargo",
-                    Categoria = "Insumos de barra",
-                    CantidadTexto = "1.8 kg",
-                    CodigoLote = "CH-280525-B",
-                    Motivo = "Derrame accidental en preparación",
-                    CostoEstimado = 522.00m,
-                    FechaRegistro = "14 nov 2026, 12:21 h",
-                    ReportadoPor = "Diego Torres (Barista)",
-                    PorcentajeLote = "22% del lote",
-                    ObservacionesOperador = "Contenedor volcado durante limpieza de estación de preparación en hora pico."
-                }
-            });
+                _solicitudesPendientes = _mermaNegocio.ObtenerPendientes();
+                ActualizarTablaYContadores();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudieron cargar las solicitudes pendientes desde MySQL:\n{ex.Message}",
+                    "Error de conexión", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void ConfigurarInterfaz()
@@ -202,7 +126,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblConteoPendientesVal = new Label
             {
-                Text = "5 Solicitudes pendientes",
+                Text = "0 Solicitudes pendientes",
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 ForeColor = ColorTranslator.FromHtml("#5C3A00"),
                 Location = new Point(16, 30),
@@ -212,7 +136,7 @@ namespace CapaPresentaciòn.Controles.Admin
             _cardContadorPendientes.Controls.AddRange(new Control[] { lblTitPend, _lblConteoPendientesVal });
             _pnlTopBar.Controls.AddRange(new Control[] { _lblRuta, _lblTitulo, _lblSubtitulo, _cardContadorPendientes });
 
-            // 2. Barra de herramientas (Buscar insumo o lote + Filtro + Botón Filtrar)
+            // 2. Barra de herramientas
             _pnlToolbar = new Panel { BackColor = Color.Transparent };
 
             Panel pnlBuscar = new Panel
@@ -255,17 +179,18 @@ namespace CapaPresentaciòn.Controles.Admin
             _cmbFiltroMotivo.Items.AddRange(new object[]
             {
                 "Todos los motivos",
-                "Humedad detectada en almacén",
-                "Caducidad próxima / cadena de frío",
-                "Envase dañado durante recepción",
-                "Producto fuera de estándar",
-                "Derrame accidental en preparación"
+                "Caducidad vencida",
+                "Derrame o accidente en barra",
+                "Producto dañado en almacén",
+                "Error de preparación en receta",
+                "Mal estado / Calidad no óptima"
             });
             _cmbFiltroMotivo.SelectedIndex = 0;
+            _cmbFiltroMotivo.SelectedIndexChanged += (s, e) => ActualizarTablaYContadores();
 
             _btnFiltrar = new Button
             {
-                Text = "Filtrar",
+                Text = "Refrescar",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 BackColor = Color.White,
@@ -275,7 +200,7 @@ namespace CapaPresentaciòn.Controles.Admin
             };
             _btnFiltrar.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
             _btnFiltrar.FlatAppearance.BorderSize = 1;
-            _btnFiltrar.Click += (s, e) => ActualizarTablaYContadores();
+            _btnFiltrar.Click += (s, e) => CargarSolicitudesDesdeMysql();
 
             _pnlToolbar.Controls.AddRange(new Control[] { pnlBuscar, _cmbFiltroMotivo, _btnFiltrar });
 
@@ -290,7 +215,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblPieConteo = new Label
             {
-                Text = "Mostrando 5 de 5 solicitudes",
+                Text = "Mostrando 0 de 0 solicitudes",
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 AutoSize = true
@@ -345,13 +270,13 @@ namespace CapaPresentaciòn.Controles.Admin
                 Padding = new Padding(12, 4, 12, 4)
             };
 
-            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colFolio", Visible = false });
-            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colInsumo", HeaderText = "INSUMO", FillWeight = 22 });
-            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colCantidad", HeaderText = "CANTIDAD", FillWeight = 11 });
-            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colLote", HeaderText = "LOTE", FillWeight = 14 });
-            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colMotivo", HeaderText = "MOTIVO", FillWeight = 25 });
+            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colIdMerma", Visible = false });
+            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colInsumo", HeaderText = "INSUMO", FillWeight = 24 });
+            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colCantidad", HeaderText = "CANTIDAD", FillWeight = 12 });
+            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colLote", HeaderText = "LOTE PEPS", FillWeight = 15 });
+            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colMotivo", HeaderText = "MOTIVO", FillWeight = 22 });
             _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colCosto", HeaderText = "COSTO ESTIMADO", FillWeight = 14 });
-            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colFecha", HeaderText = "FECHA DE REGISTRO", FillWeight = 16 });
+            _dgvSolicitudes.Columns.Add(new DataGridViewTextBoxColumn { Name = "colFecha", HeaderText = "FECHA DE REGISTRO", FillWeight = 15 });
 
             var colAccion = new DataGridViewButtonColumn
             {
@@ -360,7 +285,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 Text = "Revisar",
                 UseColumnTextForButtonValue = true,
                 FlatStyle = FlatStyle.Flat,
-                FillWeight = 11
+                FillWeight = 10
             };
             colAccion.DefaultCellStyle.BackColor = ColorTranslator.FromHtml("#1E64D8");
             colAccion.DefaultCellStyle.ForeColor = Color.White;
@@ -368,7 +293,6 @@ namespace CapaPresentaciòn.Controles.Admin
             colAccion.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             _dgvSolicitudes.Columns.Add(colAccion);
 
-            // Formato personalizado para negritas en Insumo y Costo Estimado
             _dgvSolicitudes.CellFormatting += (s, e) =>
             {
                 if (e.RowIndex < 0) return;
@@ -384,11 +308,13 @@ namespace CapaPresentaciòn.Controles.Admin
             {
                 if (e.RowIndex >= 0 && e.ColumnIndex == _dgvSolicitudes.Columns["colAccion"]!.Index)
                 {
-                    string folio = _dgvSolicitudes.Rows[e.RowIndex].Cells["colFolio"].Value?.ToString() ?? "";
-                    var solicitud = _solicitudesPendientes.FirstOrDefault(x => x.Folio == folio);
-                    if (solicitud != null)
+                    if (int.TryParse(_dgvSolicitudes.Rows[e.RowIndex].Cells["colIdMerma"].Value?.ToString(), out int idMerma))
                     {
-                        AbrirModalRevisionSolicitud(solicitud);
+                        var solicitud = _solicitudesPendientes.FirstOrDefault(x => x.IdMerma == idMerma);
+                        if (solicitud != null)
+                        {
+                            AbrirModalRevisionSolicitud(solicitud);
+                        }
                     }
                 }
             };
@@ -409,20 +335,19 @@ namespace CapaPresentaciòn.Controles.Admin
 
                 if (!string.IsNullOrEmpty(busqueda))
                 {
-                    bool coincide = sol.Insumo.ToLowerInvariant().Contains(busqueda) ||
-                                    sol.CodigoLote.ToLowerInvariant().Contains(busqueda) ||
-                                    sol.Categoria.ToLowerInvariant().Contains(busqueda);
+                    bool coincide = sol.NombreInsumo.ToLowerInvariant().Contains(busqueda) ||
+                                    sol.CodigoLote.ToLowerInvariant().Contains(busqueda);
                     if (!coincide) continue;
                 }
 
                 _dgvSolicitudes.Rows.Add(
-                    sol.Folio,
-                    $"{sol.Insumo}\n({sol.Categoria})",
-                    sol.CantidadTexto,
+                    sol.IdMerma,
+                    $"{sol.NombreInsumo}",
+                    $"{sol.Cantidad:N2} {sol.UnidadAbreviatura}",
                     sol.CodigoLote,
                     sol.Motivo,
                     sol.CostoEstimado.ToString("C2", _culturaMxn),
-                    sol.FechaRegistro,
+                    sol.FechaMerma.ToString("dd MMM yyyy, hh:mm tt"),
                     "Revisar"
                 );
                 mostradas++;
@@ -432,15 +357,117 @@ namespace CapaPresentaciòn.Controles.Admin
             _lblConteoPendientesVal.Text = $"{total} {(total == 1 ? "Solicitud pendiente" : "Solicitudes pendientes")}";
             _lblPieConteo.Text = $"Mostrando {mostradas} de {total} solicitudes";
         }
+        private bool SolicitarNipAdministrador(IWin32Window owner, string accionConfirmar)
+        {
+            bool autorizado = false;
 
-        private const string NIP_AUTORIZACION_ADMIN = "1234";
+            using Form dlgNip = new Form
+            {
+                Text = "Confirmación de Seguridad",
+                Size = new Size(390, 275),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.White
+            };
 
-        private void AbrirModalRevisionSolicitud(SolicitudMermaMock sol)
+            Label lblIcono = new Label
+            {
+                Text = "🔒  NIP de Administrador",
+                Font = new Font("Segoe UI", 13F, FontStyle.Bold),
+                ForeColor = TemaCafeteria.TextoOscuro,
+                Location = new Point(24, 18),
+                AutoSize = true
+            };
+
+            Label lblInstruccion = new Label
+            {
+                Text = $"Ingresa el NIP de 4 dígitos para confirmar:\n{accionConfirmar}",
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular),
+                ForeColor = TemaCafeteria.TextoSecundario,
+                Location = new Point(24, 48),
+                Size = new Size(330, 38)
+            };
+
+            TextBox txtNip = new TextBox
+            {
+                Location = new Point(95, 96),
+                Size = new Size(180, 42),
+                Font = new Font("Segoe UI", 16F, FontStyle.Bold),
+                TextAlign = HorizontalAlignment.Center,
+                PasswordChar = '●',
+                MaxLength = 4
+            };
+            txtNip.KeyPress += (s, e) =>
+            {
+                if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                    e.Handled = true;
+            };
+
+            Button btnCancelar = new Button
+            {
+                Text = "Cancelar",
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                ForeColor = TemaCafeteria.TextoOscuro,
+                BackColor = ColorTranslator.FromHtml("#EFECE8"),
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(24, 166),
+                Size = new Size(150, 40),
+                Cursor = Cursors.Hand
+            };
+            btnCancelar.FlatAppearance.BorderSize = 0;
+            btnCancelar.Click += (s, e) => dlgNip.Close();
+
+            Button btnConfirmar = new Button
+            {
+                Text = "Confirmar NIP",
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                ForeColor = Color.White,
+                BackColor = TemaCafeteria.CafePrimario,
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(190, 166),
+                Size = new Size(162, 40),
+                Cursor = Cursors.Hand
+            };
+            btnConfirmar.FlatAppearance.BorderSize = 0;
+            btnConfirmar.Click += (s, e) =>
+            {
+                string nipIngresado = txtNip.Text.Trim();
+                if (nipIngresado.Length != 4)
+                {
+                    MessageBox.Show("El NIP de administrador consta de 4 dígitos.", "Nip incompleto", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var auth = new AuthNegocio();
+                var resultadoNip = auth.ValidarNipAdministrador(nipIngresado);
+
+                if (!resultadoNip.Autorizado)
+                {
+                    MessageBox.Show("NIP incorrecto o el administrador no cuenta con privilegios activos.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    txtNip.Clear();
+                    txtNip.Focus();
+                    return;
+                }
+
+                autorizado = true;
+                dlgNip.Close();
+            };
+
+            dlgNip.AcceptButton = btnConfirmar;
+            dlgNip.Shown += (s, e) => txtNip.Focus();
+            dlgNip.Controls.AddRange(new Control[] { lblIcono, lblInstruccion, txtNip, btnCancelar, btnConfirmar });
+            dlgNip.ShowDialog(owner);
+
+            return autorizado;
+        }
+        private void AbrirModalRevisionSolicitud(Merma sol)
         {
             using Form dlg = new Form
             {
-                Text = $"Revisión de Solicitud de Merma — {sol.Folio}",
-                Size = new Size(540, 475),
+                Text = $"Revisión de Solicitud de Merma — #MRM-{sol.IdMerma:000}",
+                Size = new Size(540, 485),
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -450,7 +477,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblTit = new Label
             {
-                Text = $"{sol.Insumo} ({sol.CantidadTexto})",
+                Text = $"{sol.NombreInsumo} ({sol.Cantidad:N2} {sol.UnidadAbreviatura})",
                 Font = new Font("Segoe UI", 14F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(24, 18),
@@ -459,7 +486,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblSub = new Label
             {
-                Text = $"Folio: {sol.Folio}  |  Lote PEPS: {sol.CodigoLote}  |  Impacto: {sol.PorcentajeLote}",
+                Text = $"Folio ID: #MRM-{sol.IdMerma:000}  |  Lote PEPS: {sol.CodigoLote}",
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.CafePrimario,
                 Location = new Point(24, 48),
@@ -476,11 +503,11 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblDetalle = new Label
             {
-                Text = $"• Reportado por: {sol.ReportadoPor}\n" +
-                       $"• Fecha y hora: {sol.FechaRegistro}\n" +
+                Text = $"• Reportado por Usuario ID: {sol.IdUsuarioRegistra}\n" +
+                       $"• Fecha y hora: {sol.FechaMerma:dd/MM/yyyy hh:mm tt}\n" +
                        $"• Motivo registrado: {sol.Motivo}\n" +
                        $"• Costo estimado de pérdida: {sol.CostoEstimado.ToString("C2", _culturaMxn)}\n\n" +
-                       $"Observaciones del personal:\n\"{sol.ObservacionesOperador}\"",
+                       $"Observaciones del personal:\n\"{sol.Descripcion}\"",
                 Font = new Font("Segoe UI", 9.5F),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(14, 12),
@@ -527,14 +554,20 @@ namespace CapaPresentaciòn.Controles.Admin
                     return;
                 }
 
-                // Abre la segunda ventanita solicitando el NIP
-                if (!SolicitarNipAdministrador(dlg, $"Rechazar merma {sol.Folio}"))
+                // 1. EXIGIR NIP/VALIDACIÓN DE ADMINISTRADOR PARA RECHAZAR
+                if (!SolicitarNipAdministrador(dlg, $"Rechazar merma #MRM-{sol.IdMerma:000}"))
                     return;
 
-                _solicitudesPendientes.Remove(sol);
-                ActualizarTablaYContadores();
+                var resultado = _mermaNegocio.ResolverSolicitud(sol.IdMerma, aprobar: false, txtNotaAdmin.Text.Trim());
+                if (!resultado.Exito)
+                {
+                    MessageBox.Show(resultado.Mensaje, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                CargarSolicitudesDesdeMysql();
                 dlg.Close();
-                MessageBox.Show($"La solicitud {sol.Folio} fue RECHAZADA. No se descontó el lote {sol.CodigoLote}.", "Solicitud Rechazada", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(resultado.Mensaje, "Solicitud Rechazada", MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
 
             Button btnAutorizar = new Button
@@ -551,120 +584,26 @@ namespace CapaPresentaciòn.Controles.Admin
             btnAutorizar.FlatAppearance.BorderSize = 0;
             btnAutorizar.Click += (s, e) =>
             {
-                // Abre la segunda ventanita solicitando el NIP
-                if (!SolicitarNipAdministrador(dlg, $"Autorizar merma {sol.Folio}"))
+                // 2. EXIGIR NIP/VALIDACIÓN DE ADMINISTRADOR PARA AUTORIZAR
+                if (!SolicitarNipAdministrador(dlg, $"Autorizar merma #MRM-{sol.IdMerma:000}"))
                     return;
 
-                _solicitudesPendientes.Remove(sol);
-                ActualizarTablaYContadores();
+                var resultado = _mermaNegocio.ResolverSolicitud(sol.IdMerma, aprobar: true, string.IsNullOrWhiteSpace(txtNotaAdmin.Text) ? null : txtNotaAdmin.Text.Trim());
+                if (!resultado.Exito)
+                {
+                    MessageBox.Show(resultado.Mensaje, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                CargarSolicitudesDesdeMysql();
                 dlg.Close();
-                MessageBox.Show(
-                    $"Merma {sol.Folio} AUTORIZADA correctamente.\nSe aplicó el descuento de {sol.CantidadTexto} al lote {sol.CodigoLote}.",
-                    "Merma Autorizada",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
+                MessageBox.Show(resultado.Mensaje, "Merma Autorizada", MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
 
             dlg.Controls.AddRange(new Control[] { lblTit, lblSub, pnlDatos, lblNotaTit, txtNotaAdmin, btnRechazar, btnAutorizar });
             dlg.ShowDialog(this);
         }
 
-        private bool SolicitarNipAdministrador(IWin32Window owner, string accionConfirmar)
-        {
-            bool autorizado = false;
-
-            using Form dlgNip = new Form
-            {
-                Text = "Confirmación de Seguridad",
-                Size = new Size(390, 265),
-                StartPosition = FormStartPosition.CenterParent,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false,
-                BackColor = Color.White
-            };
-
-            Label lblIcono = new Label
-            {
-                Text = "🔒  Validación de NIP",
-                Font = new Font("Segoe UI", 13F, FontStyle.Bold),
-                ForeColor = TemaCafeteria.TextoOscuro,
-                Location = new Point(24, 18),
-                AutoSize = true
-            };
-
-            Label lblInstruccion = new Label
-            {
-                Text = $"Ingresa tu NIP de Administrador para confirmar:\n{accionConfirmar} ",
-                Font = new Font("Segoe UI", 9F, FontStyle.Regular),
-                ForeColor = TemaCafeteria.TextoSecundario,
-                Location = new Point(24, 48),
-                Size = new Size(330, 38)
-            };
-
-            TextBox txtNip = new TextBox
-            {
-                Location = new Point(95, 96),
-                Size = new Size(180, 42),
-                Font = new Font("Segoe UI", 16F, FontStyle.Bold),
-                TextAlign = HorizontalAlignment.Center,
-                PasswordChar = '●',
-                MaxLength = 4
-            };
-            txtNip.KeyPress += (s, e) =>
-            {
-                if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
-                    e.Handled = true;
-            };
-
-            Button btnCancelar = new Button
-            {
-                Text = "Cancelar",
-                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                ForeColor = TemaCafeteria.TextoOscuro,
-                BackColor = ColorTranslator.FromHtml("#EFECE8"),
-                FlatStyle = FlatStyle.Flat,
-                Location = new Point(24, 162),
-                Size = new Size(150, 40),
-                Cursor = Cursors.Hand
-            };
-            btnCancelar.FlatAppearance.BorderSize = 0;
-            btnCancelar.Click += (s, e) => dlgNip.Close();
-
-            Button btnConfirmar = new Button
-            {
-                Text = "Confirmar NIP",
-                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                ForeColor = Color.White,
-                BackColor = TemaCafeteria.CafePrimario,
-                FlatStyle = FlatStyle.Flat,
-                Location = new Point(190, 162),
-                Size = new Size(162, 40),
-                Cursor = Cursors.Hand
-            };
-            btnConfirmar.FlatAppearance.BorderSize = 0;
-            btnConfirmar.Click += (s, e) =>
-            {
-                if (txtNip.Text.Trim() != NIP_AUTORIZACION_ADMIN)
-                {
-                    MessageBox.Show("NIP incorrecto. Intenta nuevamente.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    txtNip.Clear();
-                    txtNip.Focus();
-                    return;
-                }
-
-                autorizado = true;
-                dlgNip.Close();
-            };
-
-            dlgNip.AcceptButton = btnConfirmar;
-            dlgNip.Shown += (s, e) => txtNip.Focus();
-            dlgNip.Controls.AddRange(new Control[] { lblIcono, lblInstruccion, txtNip, btnCancelar, btnConfirmar });
-            dlgNip.ShowDialog(owner);
-
-            return autorizado;
-        }
         private void AjustarLayoutResponsivo()
         {
             if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
@@ -672,17 +611,14 @@ namespace CapaPresentaciòn.Controles.Admin
             int margenX = 32;
             int anchoUtil = Math.Max(780, ClientSize.Width - (margenX * 2));
 
-            // Posicionar tarjeta amarilla de pendientes a la derecha de la barra superior
             _cardContadorPendientes.Location = new Point(_pnlTopBar.Width - _cardContadorPendientes.Width - margenX, 20);
 
-            // Barra de herramientas
             int topToolbar = _pnlTopBar.Height + 18;
             _pnlToolbar.Bounds = new Rectangle(margenX, topToolbar, anchoUtil, 46);
 
             _btnFiltrar.Location = new Point(anchoUtil - _btnFiltrar.Width, 4);
             _cmbFiltroMotivo.Location = new Point(_btnFiltrar.Left - _cmbFiltroMotivo.Width - 12, 6);
 
-            // Tabla y pie de tabla
             int yTabla = topToolbar + 54;
             int altoTablaCard = Math.Max(340, ClientSize.Height - yTabla - 22);
             _cardTabla.Bounds = new Rectangle(margenX, yTabla, anchoUtil, altoTablaCard);

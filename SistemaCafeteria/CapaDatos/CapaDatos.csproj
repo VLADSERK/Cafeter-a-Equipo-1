@@ -6,4 +6,12 @@
 		<Nullable>enable</Nullable>
 	</PropertyGroup>
 
+	<ItemGroup>
+	  <PackageReference Include="MySqlConnector" Version="3.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\CapaEntidades\CapaEntidades.csproj" />
+	</ItemGroup>
+
 </Project>

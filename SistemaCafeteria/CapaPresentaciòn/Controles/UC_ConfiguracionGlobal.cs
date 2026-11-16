@@ -3,12 +3,13 @@ using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
 using CapaPresentacion.Estilos;
-
+using CapaEntidades;
+using CapaLogica;
 namespace CapaPresentaciòn.Controles.Admin
 {
     public partial class UC_ConfiguracionGlobal : UserControl
     {
-        private const string NIP_AUTORIZACION_ADMIN = "1234";
+       
 
         // Valores guardados en sesión
         private string _rangoVerdeGuardado = "50% - 100%";
@@ -43,12 +44,14 @@ namespace CapaPresentaciòn.Controles.Admin
         private Button _btnCancelar = null!;
         private Button _btnGuardar = null!;
 
+
         public UC_ConfiguracionGlobal()
         {
            
             ConfigurarInterfaz();
             CargarValoresGuardados();
         }
+
 
         private void ConfigurarInterfaz()
         {
@@ -314,8 +317,29 @@ namespace CapaPresentaciòn.Controles.Admin
             return box;
         }
 
+        private readonly ConfiguracionNegocio _configNegocio = new();
+        private readonly AuthNegocio _authNegocio = new();
+        private int _idConfiguracionActual = 1;
+
         private void CargarValoresGuardados()
         {
+            try
+            {
+                ConfiguracionGeneral cfg = _configNegocio.ObtenerConfiguracionActual();
+                _idConfiguracionActual = cfg.IdConfiguracion;
+
+                _rangoVerdeGuardado = $"{cfg.VerdeMinimo:0.##}% - 100%";
+                _rangoAmarilloGuardado = $"{cfg.AmarilloMinimo:0.##}% - {cfg.AmarilloMaximo:0.##}%";
+                _rangoRojoGuardado = $"1% - {cfg.RojoMaximo:0.##}%";
+                _rangoBlancoGuardado = "0%";
+                _limiteMermaGuardado = cfg.LimiteEconomicoMerma;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo cargar la configuración desde MySQL:\n{ex.Message}",
+                    "Aviso de conexión", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+
             _txtVerde.Text = _rangoVerdeGuardado;
             _txtAmarillo.Text = _rangoAmarilloGuardado;
             _txtRojo.Text = _rangoRojoGuardado;
@@ -341,18 +365,27 @@ namespace CapaPresentaciòn.Controles.Admin
                 return;
             }
 
-            if (!SolicitarNipAdministrador("Guardar parámetros globales del sistema"))
+            if (!SolicitarNipAdministrador("Guardar parámetros globales del sistema", out string nombreAdminAutoriza))
                 return;
 
-            _rangoVerdeGuardado = _txtVerde.Text.Trim();
-            _rangoAmarilloGuardado = _txtAmarillo.Text.Trim();
-            _rangoRojoGuardado = _txtRojo.Text.Trim();
-            _rangoBlancoGuardado = _txtBlanco.Text.Trim();
-            _limiteMermaGuardado = nuevoLimite;
-            _txtLimiteMerma.Text = _limiteMermaGuardado.ToString("0.00", CultureInfo.InvariantCulture);
+            var resultado = _configNegocio.GuardarDesdeRangosTexto(
+                _idConfiguracionActual,
+                _txtVerde.Text.Trim(),
+                _txtAmarillo.Text.Trim(),
+                _txtRojo.Text.Trim(),
+                nuevoLimite
+            );
+
+            if (!resultado.Exito)
+            {
+                MessageBox.Show(resultado.Mensaje, "Error al guardar", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            CargarValoresGuardados();
 
             MessageBox.Show(
-                $"Configuración global actualizada correctamente.\n\n" +
+                $"Configuración global actualizada en MySQL por {nombreAdminAutoriza}.\n\n" +
                 $"• Verde (Óptimo): {_rangoVerdeGuardado}\n" +
                 $"• Amarillo (Precaución): {_rangoAmarilloGuardado}\n" +
                 $"• Rojo (Crítico): {_rangoRojoGuardado}\n" +
@@ -364,9 +397,10 @@ namespace CapaPresentaciòn.Controles.Admin
             );
         }
 
-        private bool SolicitarNipAdministrador(string accionConfirmar)
+        private bool SolicitarNipAdministrador(string accionConfirmar, out string nombreAdminAutoriza)
         {
             bool autorizado = false;
+            string adminEncontrado = string.Empty;
 
             using Form dlgNip = new Form
             {
@@ -390,7 +424,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblInstruccion = new Label
             {
-                Text = $"Ingresa tu NIP de Administrador para confirmar:\n{accionConfirmar} (NIP demo: 1234)",
+                Text = $"Ingresa un NIP de Administrador autorizado para:\n{accionConfirmar}",
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(24, 48),
@@ -440,15 +474,17 @@ namespace CapaPresentaciòn.Controles.Admin
             btnConfirmar.FlatAppearance.BorderSize = 0;
             btnConfirmar.Click += (s, e) =>
             {
-                if (txtNip.Text.Trim() != NIP_AUTORIZACION_ADMIN)
+                var validacion = _authNegocio.ValidarNipAdministrador(txtNip.Text.Trim());
+                if (!validacion.Autorizado)
                 {
-                    MessageBox.Show("NIP incorrecto. Intenta nuevamente.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("NIP incorrecto o sin privilegios de Administrador.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     txtNip.Clear();
                     txtNip.Focus();
                     return;
                 }
 
                 autorizado = true;
+                adminEncontrado = validacion.NombreAdmin;
                 dlgNip.Close();
             };
 
@@ -457,6 +493,7 @@ namespace CapaPresentaciòn.Controles.Admin
             dlgNip.Controls.AddRange(new Control[] { lblIcono, lblInstruccion, txtNip, btnCancelar, btnConfirmar });
             dlgNip.ShowDialog(this);
 
+            nombreAdminAutoriza = adminEncontrado;
             return autorizado;
         }
 

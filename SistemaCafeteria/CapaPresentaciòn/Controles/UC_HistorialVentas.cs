@@ -1,10 +1,11 @@
-﻿using System;
+﻿using CapaLogica;
+using CapaPresentacion.Estilos;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
-using CapaPresentacion.Estilos;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
@@ -697,9 +698,11 @@ namespace CapaPresentaciòn.Controles.Admin
             btnConfirmar.FlatAppearance.BorderSize = 0;
             btnConfirmar.Click += (s, e) =>
             {
-                if (txtNip.Text.Trim() != NIP_AUTORIZACION_ADMIN)
+                var auth = new AuthNegocio();
+                var validacion = auth.ValidarNipAdministrador(txtNip.Text.Trim());
+                if (!validacion.Autorizado)
                 {
-                    MessageBox.Show("NIP incorrecto. Intenta nuevamente.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("NIP incorrecto o sin privilegios de Administrador.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     txtNip.Clear();
                     txtNip.Focus();
                     return;

@@ -1,9 +1,10 @@
-﻿using System;
+﻿using CapaLogica;
+using CapaPresentacion.Estilos;
+using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Windows.Forms;
-using CapaPresentacion.Estilos;
 
 namespace CapaPresentaciòn.Formularios
 {
@@ -218,40 +219,56 @@ namespace CapaPresentaciòn.Formularios
                 return;
             }
 
-            // 1. Acceso como Administrador
-            if (usuario == "admin" && contrasena == "123456")
-            {
-                _lblError.Visible = false;
-                FrmPrincipalAdmin ventanaAdmin = new FrmPrincipalAdmin();
-                Hide();
-                ventanaAdmin.ShowDialog();
+            Cursor = Cursors.WaitCursor;
 
-                // Al cerrar sesión en el panel de administrador, regresa al login limpio
+            try
+            {
+                var auth = new AuthNegocio();
+                var resultado = auth.IniciarSesion(usuario, contrasena);
+
+                if (!resultado.Exito || resultado.Usuario == null)
+                {
+                    // Si fue error de conexión a MySQL muestra el detalle; si fueron credenciales usa tu estado visual (RF-11)
+                    if (resultado.Mensaje.StartsWith("Error de conexión"))
+                    {
+                        MessageBox.Show(resultado.Mensaje, "Error de Base de Datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    else
+                    {
+                        MostrarErrorCredenciales("*Usuario o contraseña incorrectos");
+                    }
+                    return;
+                }
+
+                // Credenciales válidas desde MySQL
+                _lblError.Visible = false;
+                _txtUsuario.TieneError = false;
+                _txtContrasena.TieneError = false;
+
+                Hide();
+
+                if (resultado.Usuario.NombreRol.Equals("Administrador", StringComparison.OrdinalIgnoreCase))
+                {
+                    using FrmPrincipalAdmin ventanaAdmin = new FrmPrincipalAdmin();
+                    ventanaAdmin.ShowDialog();
+                }
+                else
+                {
+                    using FrmPrincipalOperativo ventanaCajero = new FrmPrincipalOperativo();
+                    ventanaCajero.ShowDialog();
+                }
+
+                // Al cerrar sesión, limpia la sesión activa y restaura el login limpio
+                SesionActual.Cerrar();
                 _txtUsuario.Texto = string.Empty;
                 _txtContrasena.Texto = string.Empty;
                 _txtUsuario.TieneError = false;
                 _txtContrasena.TieneError = false;
                 Show();
             }
-            // 2. Acceso como Cajero
-            else if (usuario == "cajero" && contrasena == "123456")
+            finally
             {
-                _lblError.Visible = false;
-                FrmPrincipalOperativo ventanaCajero = new FrmPrincipalOperativo();
-                Hide();
-                ventanaCajero.ShowDialog();
-
-                // Al cerrar sesión en el panel del cajero, regresa al login limpio
-                _txtUsuario.Texto = string.Empty;
-                _txtContrasena.Texto = string.Empty;
-                _txtUsuario.TieneError = false;
-                _txtContrasena.TieneError = false;
-                Show();
-            }
-            else
-            {
-                // Estado Pantalla 1.1: mensaje genérico sin revelar cuál campo falló (RF-11)
-                MostrarErrorCredenciales("*Usuario o contraseña incorrectos");
+                Cursor = Cursors.Default;
             }
         }
 
