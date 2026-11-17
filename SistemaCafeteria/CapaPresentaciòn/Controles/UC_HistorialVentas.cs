@@ -2,31 +2,26 @@
 using CapaPresentacion.Estilos;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
+using Ent = CapaEntidades;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
     public partial class UC_HistorialVentas : UserControl
     {
-        private class VentaHistorialMock
-        {
-            public string Folio { get; set; } = "";
-            public string FechaHora { get; set; } = "";
-            public decimal TotalNeto { get; set; }
-            public string Estado { get; set; } = "Confirmada"; // Confirmada | Cancelada
-            public string Cajero { get; set; } = "";
-            public string MetodoPago { get; set; } = "";
-            public List<string> DetalleProductos { get; set; } = new();
-            public string MotivoCancelacion { get; set; } = "";
-        }
+        /// <summary>Cuántos días hacia atrás se cargan del historial.</summary>
+        private const int DiasHistorial = 90;
 
-        private const string NIP_AUTORIZACION_ADMIN = "1234";
-        private readonly List<VentaHistorialMock> _ventas = new();
-        private VentaHistorialMock? _ventaSeleccionada;
+        private readonly VentaNegocio _ventaNegocio = new();
         private readonly CultureInfo _culturaMxn = CultureInfo.GetCultureInfo("es-MX");
+
+        private List<Ent.Venta> _ventas = new();
+        private Ent.Venta? _ventaSeleccionada;     // con Detalles cargados
+        private bool _suprimirSeleccion;
 
         // Barra superior
         private Panel _pnlTopBar = null!;
@@ -58,94 +53,67 @@ namespace CapaPresentaciòn.Controles.Admin
 
         public UC_HistorialVentas()
         {
-           
-            CargarVentasIniciales();
             ConfigurarInterfaz();
+            MostrarVenta(null);
+
+            Load += (s, e) =>
+            {
+                if (LicenseManager.UsageMode == LicenseUsageMode.Designtime || DesignMode)
+                    return;
+
+                CargarVentas();
+            };
+        }
+
+        // =====================================================================
+        // CARGA DESDE MYSQL
+        // =====================================================================
+
+        private void CargarVentas(int? idSeleccionar = null)
+        {
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                _ventas = _ventaNegocio.ObtenerVentas(DateTime.Today.AddDays(-DiasHistorial), DateTime.Today);
+            }
+            catch (Exception ex)
+            {
+                _ventas = new List<Ent.Venta>();
+                MessageBox.Show($"No se pudo cargar el historial desde MySQL:\n{ex.Message}",
+                    "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
+
             FiltrarVentas();
 
-            if (_ventas.Count > 0)
+            int? id = idSeleccionar ?? _ventaSeleccionada?.IdVenta;
+            if (id.HasValue && _ventas.Any(v => v.IdVenta == id.Value))
+                SeleccionarFila(id.Value);
+            else if (_dgvVentas.Rows.Count > 0 && _dgvVentas.Rows[0].Cells["colId"].Value is int primero)
+                SeleccionarFila(primero);
+            else
+                MostrarVenta(null);
+        }
+
+        private void CargarDetalle(int idVenta)
+        {
+            try
             {
-                SeleccionarVenta(_ventas[0]);
+                MostrarVenta(_ventaNegocio.ObtenerVentaConDetalle(idVenta));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo cargar el detalle de la venta:\n{ex.Message}",
+                    "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void CargarVentasIniciales()
-        {
-            _ventas.AddRange(new[]
-            {
-                new VentaHistorialMock
-                {
-                    Folio = "FOLIO-8492",
-                    FechaHora = "15 Nov, 10:30",
-                    TotalNeto = 148.00m,
-                    Estado = "Confirmada",
-                    Cajero = "Sofía Ramírez (Caja 01)",
-                    MetodoPago = "Tarjeta Débito",
-                    DetalleProductos = new List<string>
-                    {
-                        "1x Capuchino grande  —  $58.00",
-                        "2x Croissant de mantequilla  —  $90.00"
-                    }
-                },
-                new VentaHistorialMock
-                {
-                    Folio = "FOLIO-8491",
-                    FechaHora = "15 Nov, 09:15",
-                    TotalNeto = 92.00m,
-                    Estado = "Confirmada",
-                    Cajero = "Carlos Méndez (Caja 01)",
-                    MetodoPago = "Efectivo",
-                    DetalleProductos = new List<string>
-                    {
-                        "1x Latte  —  $60.00",
-                        "1x Galleta de chocolate  —  $32.00"
-                    }
-                },
-                new VentaHistorialMock
-                {
-                    Folio = "FOLIO-8490",
-                    FechaHora = "14 Nov, 19:40",
-                    TotalNeto = 132.00m,
-                    Estado = "Confirmada",
-                    Cajero = "Sofía Ramírez (Caja 01)",
-                    MetodoPago = "Tarjeta Crédito",
-                    DetalleProductos = new List<string>
-                    {
-                        "1x Frappé Moka  —  $74.00",
-                        "1x Cappuccino  —  $58.00"
-                    }
-                },
-                new VentaHistorialMock
-                {
-                    Folio = "FOLIO-8489",
-                    FechaHora = "14 Nov, 19:05",
-                    TotalNeto = 100.00m,
-                    Estado = "Confirmada",
-                    Cajero = "Diego Torres (Caja 02)",
-                    MetodoPago = "Efectivo",
-                    DetalleProductos = new List<string>
-                    {
-                        "1x Cheesecake de Fresa  —  $65.00",
-                        "1x Dona Glaseada  —  $35.00"
-                    }
-                },
-                new VentaHistorialMock
-                {
-                    Folio = "FOLIO-8488",
-                    FechaHora = "14 Nov, 18:45",
-                    TotalNeto = 210.00m,
-                    Estado = "Cancelada",
-                    Cajero = "Carlos Méndez (Caja 01)",
-                    MetodoPago = "Efectivo",
-                    MotivoCancelacion = "Error de captura en orden duplicada antes de preparación.",
-                    DetalleProductos = new List<string>
-                    {
-                        "2x Moka Caliente  —  $136.00",
-                        "1x Frappé Moka  —  $74.00"
-                    }
-                }
-            });
-        }
+        // =====================================================================
+        // INTERFAZ
+        // =====================================================================
 
         private void ConfigurarInterfaz()
         {
@@ -186,7 +154,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblSubtitulo = new Label
             {
-                Text = "Busca ventas confirmadas por folio único, ejecuta cancelaciones formales y gestiona el reintegro de ingredientes.",
+                Text = $"Ventas de los últimos {DiasHistorial} días. Busca por folio o cajero, cancela ventas y regresa los ingredientes al inventario.",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(32, 65),
@@ -207,7 +175,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
         private void ConstruirColumnaIzquierda()
         {
-            // Tarjeta superior izquierda: Buscar venta por folio único
+            // Tarjeta superior izquierda: Buscar venta
             _cardBusqueda = new PanelRedondeado
             {
                 RadioBorde = 14,
@@ -216,7 +184,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblBuscarTit = new Label
             {
-                Text = "Buscar venta por folio único",
+                Text = "Buscar venta por folio o cajero",
                 Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(20, 14),
@@ -226,7 +194,7 @@ namespace CapaPresentaciòn.Controles.Admin
             _txtBuscarFolio = new TextBox
             {
                 Font = new Font("Segoe UI", 10.5F),
-                PlaceholderText = "Ej. FOLIO-8492 (deja vacío para ver todas)",
+                PlaceholderText = "Ej. V-000012 (deja vacío para ver todas)",
                 Location = new Point(20, 42),
                 Height = 36
             };
@@ -234,7 +202,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _btnBuscar = new Button
             {
-                Text = "Buscar",
+                Text = "Actualizar",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = ColorTranslator.FromHtml("#5C5650"),
@@ -243,7 +211,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 Cursor = Cursors.Hand
             };
             _btnBuscar.FlatAppearance.BorderSize = 0;
-            _btnBuscar.Click += (s, e) => FiltrarVentas();
+            _btnBuscar.Click += (s, e) => CargarVentas();
 
             _cardBusqueda.Controls.AddRange(new Control[] { lblBuscarTit, _txtBuscarFolio, _btnBuscar });
 
@@ -256,7 +224,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblTitResultados = new Label
             {
-                Text = "Resultados de ventas (5)",
+                Text = "Resultados de ventas (0)",
                 Font = new Font("Segoe UI", 11F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(20, 16),
@@ -300,6 +268,8 @@ namespace CapaPresentaciòn.Controles.Admin
                 Padding = new Padding(8, 0, 8, 0)
             };
 
+            // Columna oculta con el id real de la venta en MySQL
+            _dgvVentas.Columns.Add(new DataGridViewTextBoxColumn { Name = "colId", HeaderText = "Id", Visible = false });
             _dgvVentas.Columns.Add(new DataGridViewTextBoxColumn { Name = "colFolio", HeaderText = "Folio", FillWeight = 22 });
             _dgvVentas.Columns.Add(new DataGridViewTextBoxColumn { Name = "colFecha", HeaderText = "Fecha / Hora", FillWeight = 22 });
             _dgvVentas.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTotal", HeaderText = "Total", FillWeight = 17 });
@@ -348,29 +318,31 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _dgvVentas.SelectionChanged += (s, e) =>
             {
-                if (_dgvVentas.SelectedRows.Count > 0)
-                {
-                    string folio = _dgvVentas.SelectedRows[0].Cells["colFolio"].Value?.ToString() ?? "";
-                    var venta = _ventas.FirstOrDefault(v => v.Folio == folio);
-                    if (venta != null) SeleccionarVenta(venta);
-                }
+                if (_suprimirSeleccion || _dgvVentas.SelectedRows.Count == 0)
+                    return;
+
+                if (_dgvVentas.SelectedRows[0].Cells["colId"].Value is not int id)
+                    return;
+
+                if (_ventaSeleccionada?.IdVenta == id)
+                    return;
+
+                CargarDetalle(id);
             };
 
             _dgvVentas.CellContentClick += (s, e) =>
             {
-                if (e.RowIndex >= 0 && e.ColumnIndex == _dgvVentas.Columns["colAccion"]!.Index)
-                {
-                    string folio = _dgvVentas.Rows[e.RowIndex].Cells["colFolio"].Value?.ToString() ?? "";
-                    var venta = _ventas.FirstOrDefault(v => v.Folio == folio);
-                    if (venta != null)
-                    {
-                        SeleccionarVenta(venta);
-                        if (venta.Estado == "Confirmada")
-                        {
-                            _txtMotivoCancelacion.Focus();
-                        }
-                    }
-                }
+                if (e.RowIndex < 0 || e.ColumnIndex != _dgvVentas.Columns["colAccion"]!.Index)
+                    return;
+
+                if (_dgvVentas.Rows[e.RowIndex].Cells["colId"].Value is not int id)
+                    return;
+
+                if (_ventaSeleccionada?.IdVenta != id)
+                    CargarDetalle(id);
+
+                if (_ventaSeleccionada?.Estado == "Confirmada")
+                    _txtMotivoCancelacion.Focus();
             };
 
             _cardResultados.Controls.AddRange(new Control[] { _lblTitResultados, _dgvVentas });
@@ -395,7 +367,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblFolioBadge = new Label
             {
-                Text = "FOLIO-8492",
+                Text = "—",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.CafePrimario,
                 BackColor = ColorTranslator.FromHtml("#EFE6DC"),
@@ -423,7 +395,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblDetalleLista = new Label
             {
-                Text = "1x Capuchino grande — $58.00",
+                Text = "",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(14, 34),
@@ -441,7 +413,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblTotalNetoVal = new Label
             {
-                Text = "Total neto: $148.00",
+                Text = "Total neto: $0.00",
                 Font = new Font("Segoe UI", 11F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(14, 114),
@@ -466,6 +438,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 9.5F),
                 Location = new Point(24, 248),
                 Height = 84,
+                MaxLength = 200,
                 PlaceholderText = "Indique el motivo obligatorio de la cancelación (ej. Error en cobro, producto devuelto por cliente)..."
             };
 
@@ -478,7 +451,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 AutoSize = true
             };
 
-            // Casilla Restaurar ingredientes al inventario
+            // Los insumos SIEMPRE se regresan a sus lotes (movimiento REVERSION en el kardex)
             _chkRestaurarInsumos = new CheckBox
             {
                 Text = "Restaurar ingredientes al inventario",
@@ -486,12 +459,13 @@ namespace CapaPresentaciòn.Controles.Admin
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(24, 368),
                 AutoSize = true,
-                Checked = true
+                Checked = true,
+                Enabled = false
             };
 
             _lblNotaRestaurar = new Label
             {
-                Text = "Los insumos recuperables (café, leche, panadería) serán devueltos automáticamente al stock activo.",
+                Text = "Los insumos descontados en la venta regresan automáticamente a sus lotes originales (movimiento REVERSION en el kardex).",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(44, 392),
@@ -513,7 +487,8 @@ namespace CapaPresentaciòn.Controles.Admin
             _btnCerrarPanel.FlatAppearance.BorderSize = 1;
             _btnCerrarPanel.Click += (s, e) =>
             {
-                _txtMotivoCancelacion.Clear();
+                if (_ventaSeleccionada?.Estado == "Confirmada")
+                    _txtMotivoCancelacion.Clear();
                 _txtBuscarFolio.Clear();
             };
 
@@ -540,58 +515,148 @@ namespace CapaPresentaciòn.Controles.Admin
             });
         }
 
+        // =====================================================================
+        // LISTA DE VENTAS
+        // =====================================================================
+
         private void FiltrarVentas()
         {
+            if (_dgvVentas == null)
+                return;
+
             string filtro = _txtBuscarFolio.Text.Trim().ToLowerInvariant();
+
+            _suprimirSeleccion = true;
             _dgvVentas.Rows.Clear();
             int conteo = 0;
 
             foreach (var v in _ventas)
             {
-                if (!string.IsNullOrEmpty(filtro) && !v.Folio.ToLowerInvariant().Contains(filtro))
+                if (!string.IsNullOrEmpty(filtro)
+                    && !v.Folio.ToLowerInvariant().Contains(filtro)
+                    && !v.NombreCajero.ToLowerInvariant().Contains(filtro))
                     continue;
 
                 string textoAccion = v.Estado == "Confirmada" ? "Cancelar" : "Sin acciones";
                 _dgvVentas.Rows.Add(
+                    v.IdVenta,
                     v.Folio,
-                    v.FechaHora,
-                    v.TotalNeto.ToString("C2", _culturaMxn),
+                    v.FechaVenta.ToString("dd MMM, HH:mm", _culturaMxn),
+                    v.Total.ToString("C2", _culturaMxn),
                     v.Estado,
                     textoAccion
                 );
                 conteo++;
             }
 
+            // Volver a marcar la venta que se está viendo (sin recargarla)
+            _dgvVentas.ClearSelection();
+            if (_ventaSeleccionada != null)
+                MarcarFila(_ventaSeleccionada.IdVenta);
+
+            _suprimirSeleccion = false;
             _lblTitResultados.Text = $"Resultados de ventas ({conteo})";
         }
 
-        private void SeleccionarVenta(VentaHistorialMock venta)
+        private void MarcarFila(int idVenta)
+        {
+            foreach (DataGridViewRow row in _dgvVentas.Rows)
+            {
+                if (row.Cells["colId"].Value is int id && id == idVenta)
+                {
+                    _dgvVentas.CurrentCell = row.Cells["colFolio"];
+                    row.Selected = true;
+                    return;
+                }
+            }
+        }
+
+        private void SeleccionarFila(int idVenta)
+        {
+            _suprimirSeleccion = true;
+            _dgvVentas.ClearSelection();
+            MarcarFila(idVenta);
+            _suprimirSeleccion = false;
+
+            CargarDetalle(idVenta);
+        }
+
+        // =====================================================================
+        // PANEL DERECHO
+        // =====================================================================
+
+        private void MostrarVenta(Ent.Venta? venta)
         {
             _ventaSeleccionada = venta;
+
+            if (venta == null)
+            {
+                _lblFolioBadge.Text = "—";
+                _lblPanelDerTitulo.Text = "Cancelar Venta";
+                _lblDetalleLista.Text = "Selecciona una venta de la lista.";
+                _lblTotalNetoVal.Text = "Total neto: $0.00";
+                _txtMotivoCancelacion.Text = string.Empty;
+                _txtMotivoCancelacion.ReadOnly = true;
+                _btnConfirmarCancelacion.Enabled = false;
+                _btnConfirmarCancelacion.BackColor = ColorTranslator.FromHtml("#BDBDBD");
+                ReubicarBadge();
+                return;
+            }
+
+            // Hasta 3 líneas de productos; si hay más, se resume
+            var lineas = new List<string>();
+            var detalles = venta.Detalles;
+            int mostrar = detalles.Count > 3 ? 2 : detalles.Count;
+            for (int i = 0; i < mostrar; i++)
+            {
+                var d = detalles[i];
+                lineas.Add($"{d.Cantidad}x {d.NombreProducto}  —  {d.Subtotal.ToString("C2", _culturaMxn)}");
+            }
+            if (detalles.Count > mostrar)
+                lineas.Add($"… y {detalles.Count - mostrar} productos más");
+
+            string pago = venta.MetodoPago ?? "—";
+            if (venta.MontoRecibido.HasValue)
+                pago += $", recibió {venta.MontoRecibido.Value.ToString("C2", _culturaMxn)}";
+
+            lineas.Add($"Cajero: {venta.NombreCajero} · {pago} · {venta.FechaVenta.ToString("dd/MM/yyyy HH:mm", _culturaMxn)}");
+
             _lblFolioBadge.Text = venta.Folio;
-            _lblDetalleLista.Text = string.Join("\n", venta.DetalleProductos) + $"\nCajero: {venta.Cajero} ({venta.MetodoPago})";
-            _lblTotalNetoVal.Text = $"Total neto: {venta.TotalNeto.ToString("C2", _culturaMxn)}";
+            _lblDetalleLista.Text = string.Join("\n", lineas);
+            _lblTotalNetoVal.Text = $"Total neto: {venta.Total.ToString("C2", _culturaMxn)}";
 
             bool esConfirmada = venta.Estado == "Confirmada";
             _lblPanelDerTitulo.Text = esConfirmada ? "Cancelar Venta" : "Venta Cancelada (Solo lectura)";
             _txtMotivoCancelacion.ReadOnly = !esConfirmada;
-            _txtMotivoCancelacion.Text = esConfirmada ? "" : venta.MotivoCancelacion;
-            _chkRestaurarInsumos.Enabled = esConfirmada;
+            _txtMotivoCancelacion.Text = esConfirmada ? string.Empty : (venta.MotivoCancelacion ?? string.Empty);
             _btnConfirmarCancelacion.Enabled = esConfirmada;
             _btnConfirmarCancelacion.BackColor = esConfirmada
                 ? ColorTranslator.FromHtml("#9E1B1B")
                 : ColorTranslator.FromHtml("#BDBDBD");
+
+            ReubicarBadge();
         }
+
+        private void ReubicarBadge()
+        {
+            if (_cardCancelarVenta != null && _cardCancelarVenta.Width > 0)
+                _lblFolioBadge.Location = new Point(_cardCancelarVenta.Width - _lblFolioBadge.Width - 24, 22);
+        }
+
+        // =====================================================================
+        // CANCELACIÓN
+        // =====================================================================
 
         private void BtnConfirmarCancelacion_Click(object? sender, EventArgs e)
         {
             if (_ventaSeleccionada == null || _ventaSeleccionada.Estado != "Confirmada")
                 return;
 
-            if (string.IsNullOrWhiteSpace(_txtMotivoCancelacion.Text))
+            string motivo = _txtMotivoCancelacion.Text.Trim();
+            if (motivo.Length < 5)
             {
                 MessageBox.Show(
-                    "El motivo de cancelación es obligatorio para auditoría interna.",
+                    "El motivo de cancelación es obligatorio para auditoría interna (mínimo 5 caracteres).",
                     "Campo obligatorio",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
@@ -600,31 +665,55 @@ namespace CapaPresentaciòn.Controles.Admin
                 return;
             }
 
-            // Solicitar NIP de Administrador antes de anular el ticket
-            if (!SolicitarNipAdministrador($"Cancelar ticket {_ventaSeleccionada.Folio}"))
+            var venta = _ventaSeleccionada;
+
+            var confirmar = MessageBox.Show(
+                $"¿Cancelar la venta {venta.Folio} por {venta.Total.ToString("C2", _culturaMxn)}?\n\n" +
+                "Los ingredientes regresarán al inventario y la venta ya no contará en los reportes.",
+                "Confirmar cancelación",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+            if (confirmar != DialogResult.Yes)
                 return;
 
-            _ventaSeleccionada.Estado = "Cancelada";
-            _ventaSeleccionada.MotivoCancelacion = _txtMotivoCancelacion.Text.Trim();
+            // Solicitar NIP de Administrador antes de anular el ticket
+            string? nip = SolicitarNipAdministrador($"Cancelar ticket {venta.Folio}");
+            if (nip == null)
+                return;
 
-            string msgInventario = _chkRestaurarInsumos.Checked
-                ? "Los insumos recuperables han sido reintegrados al inventario PEPS."
-                : "No se reintegraron insumos al stock.";
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                var resultado = _ventaNegocio.CancelarVenta(venta.IdVenta, motivo, nip);
 
-            FiltrarVentas();
-            SeleccionarVenta(_ventaSeleccionada);
+                if (!resultado.Exito)
+                {
+                    MessageBox.Show(resultado.Mensaje, "No se pudo cancelar", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
 
-            MessageBox.Show(
-                $"La venta {_ventaSeleccionada.Folio} ({_ventaSeleccionada.TotalNeto.ToString("C2", _culturaMxn)}) ha sido CANCELADA.\n\n{msgInventario}",
-                "Cancelación Confirmada",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+                CargarVentas(venta.IdVenta);
+
+                MessageBox.Show(
+                    $"{resultado.Mensaje}\n\nTotal anulado: {venta.Total.ToString("C2", _culturaMxn)}",
+                    "Cancelación confirmada",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
         }
 
-        private bool SolicitarNipAdministrador(string accionConfirmar)
+        /// <summary>
+        /// Muestra el diálogo de NIP. Devuelve el NIP si es válido, o null si se canceló.
+        /// (VentaNegocio lo vuelve a validar al cancelar.)
+        /// </summary>
+        private string? SolicitarNipAdministrador(string accionConfirmar)
         {
-            bool autorizado = false;
+            string? nipValido = null;
 
             using Form dlgNip = new Form
             {
@@ -648,7 +737,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblInstruccion = new Label
             {
-                Text = $"Ingresa tu NIP de Administrador para confirmar:\n{accionConfirmar} ",
+                Text = $"Ingresa el NIP de un Administrador para confirmar:\n{accionConfirmar} ",
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(24, 48),
@@ -698,18 +787,25 @@ namespace CapaPresentaciòn.Controles.Admin
             btnConfirmar.FlatAppearance.BorderSize = 0;
             btnConfirmar.Click += (s, e) =>
             {
-                var auth = new AuthNegocio();
-                var validacion = auth.ValidarNipAdministrador(txtNip.Text.Trim());
-                if (!validacion.Autorizado)
+                try
                 {
-                    MessageBox.Show("NIP incorrecto o sin privilegios de Administrador.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    txtNip.Clear();
-                    txtNip.Focus();
-                    return;
-                }
+                    var auth = new AuthNegocio();
+                    var validacion = auth.ValidarNipAdministrador(txtNip.Text.Trim());
+                    if (!validacion.Autorizado)
+                    {
+                        MessageBox.Show("NIP incorrecto o sin privilegios de Administrador.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        txtNip.Clear();
+                        txtNip.Focus();
+                        return;
+                    }
 
-                autorizado = true;
-                dlgNip.Close();
+                    nipValido = txtNip.Text.Trim();
+                    dlgNip.Close();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"No se pudo validar el NIP en MySQL:\n{ex.Message}", "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             };
 
             dlgNip.AcceptButton = btnConfirmar;
@@ -717,8 +813,12 @@ namespace CapaPresentaciòn.Controles.Admin
             dlgNip.Controls.AddRange(new Control[] { lblIcono, lblInstruccion, txtNip, btnCancelar, btnConfirmar });
             dlgNip.ShowDialog(this);
 
-            return autorizado;
+            return nipValido;
         }
+
+        // =====================================================================
+        // LAYOUT
+        // =====================================================================
 
         private void AjustarLayoutResponsivo()
         {
@@ -745,7 +845,6 @@ namespace CapaPresentaciòn.Controles.Admin
             _dgvVentas.Bounds = new Rectangle(14, 48, anchoIzq - 28, altoResultados - 62);
 
             // Columna derecha: Panel Cancelar Venta
-            // Columna derecha: Panel Cancelar Venta
             _cardCancelarVenta.Bounds = new Rectangle(margenX + anchoIzq + gap, topContenido, anchoDer, altoDisponible);
             _lblFolioBadge.Location = new Point(anchoDer - _lblFolioBadge.Width - 24, 22);
 
@@ -766,7 +865,7 @@ namespace CapaPresentaciòn.Controles.Admin
             _lblNotaRestaurar.Location = new Point(44, yCheck + 24);
             _lblNotaRestaurar.Width = anchoInternoDer - 20;
 
-            // Expandir el cuadro de texto Motivo de cancelación para llenar todo el espacio intermedio
+            // Expandir el cuadro de texto Motivo de cancelación para llenar el espacio intermedio
             int yTxtMotivo = 248;
             int altoTxtMotivo = Math.Max(90, yCheck - yTxtMotivo - 34);
             _txtMotivoCancelacion.Bounds = new Rectangle(24, yTxtMotivo, anchoInternoDer, altoTxtMotivo);

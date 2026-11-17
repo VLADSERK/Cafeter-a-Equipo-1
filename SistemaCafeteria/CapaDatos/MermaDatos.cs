@@ -17,9 +17,16 @@ namespace CapaDatos
 
             try
             {
-                // 1. Verificar saldo real del lote en BD (bloqueo pesimista FOR UPDATE)
+                // 1. Validaciones básicas
+                if (!merma.IdLote.HasValue)
+                    throw new InvalidOperationException("Debe seleccionar el lote del que se registrará la merma.");
+
+                if (merma.Cantidad <= 0)
+                    throw new InvalidOperationException("La cantidad de la merma debe ser mayor a cero.");
+
+                // 2. Verificar saldo real del lote en BD (bloqueo pesimista FOR UPDATE)
                 const string sqlCheckLote = @"
-                    SELECT cantidad_disponible, costo_unitario
+                    SELECT cantidad_disponible, costo_unitario, id_insumo
                     FROM Lote
                     WHERE id_lote = @id_lote
                     FOR UPDATE;";
@@ -27,10 +34,13 @@ namespace CapaDatos
                 decimal disponibleActual;
                 using (var cmdCheck = new MySqlCommand(sqlCheckLote, conn, tx))
                 {
-                    cmdCheck.Parameters.AddWithValue("@id_lote", merma.IdLote);
+                    cmdCheck.Parameters.AddWithValue("@id_lote", merma.IdLote.Value);
                     using var reader = cmdCheck.ExecuteReader();
                     if (!reader.Read())
                         throw new InvalidOperationException("El lote seleccionado ya no existe en la base de datos.");
+
+                    if (reader.GetInt32("id_insumo") != merma.IdInsumo)
+                        throw new InvalidOperationException("El lote seleccionado no corresponde al insumo de la merma.");
 
                     disponibleActual = reader.GetDecimal("cantidad_disponible");
                 }
@@ -38,7 +48,7 @@ namespace CapaDatos
                 if (merma.Cantidad > disponibleActual)
                     throw new InvalidOperationException($"Stock insuficiente en el lote. Disponible actual: {disponibleActual:N2}.");
 
-                // 2. Insertar registro en Merma
+                // 3. Insertar registro en Merma
                 const string sqlInsertMerma = @"
                     INSERT INTO Merma (
                         id_insumo, id_lote, id_usuario_registra, id_usuario_autoriza,
@@ -53,7 +63,7 @@ namespace CapaDatos
                 using (var cmdMerma = new MySqlCommand(sqlInsertMerma, conn, tx))
                 {
                     cmdMerma.Parameters.AddWithValue("@id_insumo", merma.IdInsumo);
-                    cmdMerma.Parameters.AddWithValue("@id_lote", merma.IdLote);
+                    cmdMerma.Parameters.AddWithValue("@id_lote", merma.IdLote.Value);
                     cmdMerma.Parameters.AddWithValue("@id_usuario_registra", merma.IdUsuarioRegistra);
                     cmdMerma.Parameters.AddWithValue("@cantidad", merma.Cantidad);
                     cmdMerma.Parameters.AddWithValue("@motivo", merma.Motivo);
@@ -64,8 +74,8 @@ namespace CapaDatos
                     idMerma = Convert.ToInt32(cmdMerma.ExecuteScalar());
                 }
 
-                // 3. Si NO excede el límite económico, descontar inmediatamente del lote y registrar en Kardex
-                if (!requiereAutorizacion && merma.IdLote.HasValue)
+                // 4. Si NO excede el límite económico, descontar inmediatamente del lote y registrar en Kardex
+                if (!requiereAutorizacion)
                 {
                     const string sqlDescontarLote = @"
                         UPDATE Lote

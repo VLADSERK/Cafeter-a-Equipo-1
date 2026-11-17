@@ -1,30 +1,40 @@
-﻿using CapaPresentacion.Estilos; 
+﻿using CapaLogica;
+using CapaPresentacion.Estilos;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using Ent = CapaEntidades;
 
 namespace CapaPresentaciòn.Controles
 {
     public partial class UC_PuntoVenta : UserControl
     {
-        private readonly CultureInfo _culturaMxn = new("es-MX");
+        // Nombres de categoría tal como están en la tabla Categoria de MySQL
+        private const string CatCalientes = "Bebidas Calientes";
+        private const string CatFrias = "Bebidas Frías";
+        private const string CatReposteria = "Panadería y Repostería";
 
-        // Modelos visuales internos (mock data)
-        private record ProductoMock(string Nombre, string Descripcion, decimal Precio, string Categoria, string ImagenArchivo);
+        private readonly CultureInfo _culturaMxn = new("es-MX");
+        private readonly CatalogoNegocio _catalogoNegocio = new();
+        private readonly VentaNegocio _ventaNegocio = new();
+
         private class ItemComanda
         {
-            public required ProductoMock Producto { get; init; }
+            public required Ent.Producto Producto { get; init; }
             public int Cantidad { get; set; }
             public decimal Importe => Producto.Precio * Cantidad;
         }
 
-        private readonly List<ProductoMock> _catalogoCompleto = new();
+        private List<Ent.Producto> _catalogoCompleto = new();
         private readonly List<ItemComanda> _comandaActual = new();
-        private string _categoriaActiva = "Bebidas Calientes";
-        private int _numeroComanda = 184;
+        private readonly Dictionary<string, Image> _cacheImagenes = new(StringComparer.OrdinalIgnoreCase);
+        private string _categoriaActiva = CatCalientes;
+        private string? _ultimoFolio;
 
         // Barra superior
         private Panel _pnlTopBar = null!;
@@ -58,51 +68,54 @@ namespace CapaPresentaciòn.Controles
         public UC_PuntoVenta()
         {
             InitializeComponent();
-            InicializarCatalogoMock();
             ConfigurarInterfazPuntoVenta();
-            CargarComandaInicialMock();
+            RenderizarProductos();
+            RefrescarComanda();
+
+            Load += (s, e) =>
+            {
+                if (LicenseManager.UsageMode == LicenseUsageMode.Designtime || DesignMode)
+                    return;
+
+                CargarCatalogo();
+            };
+        }
+
+        // =====================================================================
+        // CARGA DESDE MYSQL
+        // =====================================================================
+
+        /// <summary>Productos activos y con receta vigente.</summary>
+        private void CargarCatalogo()
+        {
+            try
+            {
+                _catalogoCompleto = _catalogoNegocio.ObtenerProductosParaVenta();
+            }
+            catch (Exception ex)
+            {
+                _catalogoCompleto = new List<Ent.Producto>();
+                MessageBox.Show($"No se pudo cargar el catálogo desde MySQL:\n{ex.Message}",
+                    "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
+            // Si cambió algún precio o se desactivó un producto, actualizar la comanda abierta
+            foreach (var item in _comandaActual.ToList())
+            {
+                var actualizado = _catalogoCompleto.FirstOrDefault(p => p.IdProducto == item.Producto.IdProducto);
+                _comandaActual.Remove(item);
+                if (actualizado != null)
+                    _comandaActual.Add(new ItemComanda { Producto = actualizado, Cantidad = item.Cantidad });
+            }
+
             RenderizarProductos();
             RefrescarComanda();
         }
 
-        private void InicializarCatalogoMock()
-        {
-            _catalogoCompleto.AddRange(new[]
-            {
-        // Bebidas Calientes (7)
-        new ProductoMock("Cappuccino", "Espresso, leche y espuma", 58.00m, "Bebidas Calientes", "capuchino.png"),
-        new ProductoMock("Latte", "Espresso doble con leche vaporizada", 60.00m, "Bebidas Calientes", "latte.png"),
-        new ProductoMock("Americano", "Doble espresso y agua caliente", 42.00m, "Bebidas Calientes", "americano.png"),
-        new ProductoMock("Espresso", "Carga intensa de café de especialidad", 38.00m, "Bebidas Calientes", "expresso.png"),
-        new ProductoMock("Moka Caliente", "Chocolate, espresso y leche", 68.00m, "Bebidas Calientes", "mokaC.png"),
-        new ProductoMock("Chocolate Caliente", "Cacao artesanal y leche cremosa", 56.00m, "Bebidas Calientes", "chocolateC.png"),
-        new ProductoMock("Matcha Latte", "Té verde matcha ceremonial y leche", 65.00m, "Bebidas Calientes", "MatchaLatte.png"),
+        // =====================================================================
+        // INTERFAZ
+        // =====================================================================
 
-        // Bebidas Frías (5)
-        new ProductoMock("Latte Frío", "Espresso, leche fría y hielo", 64.00m, "Bebidas Frías", "LatteF.jpeg"),
-        new ProductoMock("Cold Brew", "Extracción en frío por 18 horas", 55.00m, "Bebidas Frías", "ColdBrew.png"),
-        new ProductoMock("Frappé Moka", "Café, cacao y crema batida", 74.00m, "Bebidas Frías", "FrappeMoka.png"),
-        new ProductoMock("Matcha Iced Latte", "Té verde matcha frío y leche", 68.00m, "Bebidas Frías", "MatchaIcedLatte.png"),
-        new ProductoMock("Chocolate Frío", "Cacao artesanal frío con hielo", 58.00m, "Bebidas Frías", "ChocolateF.jpeg"),
-
-        // Repostería (8)
-        new ProductoMock("Galleta de Chocolate", "Chispas de chocolate semiamargo", 32.00m, "Repostería", "GalletaCh.png"),
-        new ProductoMock("Brownie de Chocolate", "Intenso cacao con nuez tostada", 48.00m, "Repostería", "BrowniedeCh.png"),
-        new ProductoMock("Cheesecake de Fresa", "Base de galleta con mermelada natural", 65.00m, "Repostería", "CheesecakeFresa.png"),
-        new ProductoMock("Croissant Mantequilla", "Hojaldre francés recién horneado", 45.00m, "Repostería", "CroissantM.png"),
-        new ProductoMock("Dona Glaseada", "Esponjosa con glaseado de vainilla", 35.00m, "Repostería", "DonaGlaseada.png"),
-        new ProductoMock("Muffin de Arándanos", "Horneado con arándanos frescos", 44.00m, "Repostería", "MuffinArandanos.png"),
-        new ProductoMock("Panqué de Plátano", "Plátanos maduros con nuez", 40.00m, "Repostería", "PanquedePlatano.png"),
-        new ProductoMock("Rol de Canela", "Glaseado cremoso de queso crema", 52.00m, "Repostería", "RoldeC.png")
-    });
-        }
-
-        private void CargarComandaInicialMock()
-        {
-            _comandaActual.Add(new ItemComanda { Producto = _catalogoCompleto.First(p => p.Nombre == "Cappuccino"), Cantidad = 2 });
-            _comandaActual.Add(new ItemComanda { Producto = _catalogoCompleto.First(p => p.Nombre == "Galleta de Chocolate"), Cantidad = 1 });
-            _comandaActual.Add(new ItemComanda { Producto = _catalogoCompleto.First(p => p.Nombre == "Latte Frío"), Cantidad = 1 });
-        }
         private void ConfigurarInterfazPuntoVenta()
         {
             BackColor = TemaCafeteria.FondoCrema;
@@ -191,7 +204,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblBadgeContador = new Label
             {
-                Text = "6 productos",
+                Text = "0 productos",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 BackColor = Color.White,
@@ -212,9 +225,9 @@ namespace CapaPresentaciòn.Controles
             _btnTabFrias = CrearBotonCategoria("🧊  Bebidas Frías");
             _btnTabReposteria = CrearBotonCategoria("🥐  Repostería");
 
-            _btnTabCalientes.Click += (s, e) => CambiarCategoria("Bebidas Calientes");
-            _btnTabFrias.Click += (s, e) => CambiarCategoria("Bebidas Frías");
-            _btnTabReposteria.Click += (s, e) => CambiarCategoria("Repostería");
+            _btnTabCalientes.Click += (s, e) => CambiarCategoria(CatCalientes);
+            _btnTabFrias.Click += (s, e) => CambiarCategoria(CatFrias);
+            _btnTabReposteria.Click += (s, e) => CambiarCategoria(CatReposteria);
 
             _pnlTabsCategorias.Controls.AddRange(new Control[] { _btnTabCalientes, _btnTabFrias, _btnTabReposteria });
 
@@ -262,9 +275,9 @@ namespace CapaPresentaciòn.Controles
         {
             var mapa = new (Button btn, string cat)[]
             {
-                (_btnTabCalientes, "Bebidas Calientes"),
-                (_btnTabFrias, "Bebidas Frías"),
-                (_btnTabReposteria, "Repostería")
+                (_btnTabCalientes, CatCalientes),
+                (_btnTabFrias, CatFrias),
+                (_btnTabReposteria, CatReposteria)
             };
 
             foreach (var (btn, cat) in mapa)
@@ -280,7 +293,7 @@ namespace CapaPresentaciòn.Controles
             _flowProductos.SuspendLayout();
             _flowProductos.Controls.Clear();
 
-            var filtrados = _catalogoCompleto.Where(p => p.Categoria == _categoriaActiva).ToList();
+            var filtrados = _catalogoCompleto.Where(p => p.NombreCategoria == _categoriaActiva).ToList();
             _lblBadgeContador.Text = $"{filtrados.Count} productos";
 
             int anchoTarjeta = Math.Max(195, (_flowProductos.ClientSize.Width - 46) / 3);
@@ -295,7 +308,7 @@ namespace CapaPresentaciòn.Controles
             _flowProductos.ResumeLayout();
         }
 
-        private PanelRedondeado CrearTarjetaProducto(ProductoMock prod, int ancho)
+        private PanelRedondeado CrearTarjetaProducto(Ent.Producto prod, int ancho)
         {
             PanelRedondeado card = new PanelRedondeado
             {
@@ -305,12 +318,12 @@ namespace CapaPresentaciòn.Controles
                 BackColor = Color.White
             };
 
-            // Cabecera visual ilustrada (simula foto del producto con etiqueta Disponible)
+            // Cabecera visual (foto del producto con etiqueta Disponible)
             Panel pnlImagen = new Panel
             {
                 Location = new Point(10, 10),
                 Size = new Size(ancho - 20, 104),
-                BackColor = ObtenerColorFondoCategoria(prod.Categoria)
+                BackColor = ObtenerColorFondoCategoria(prod.NombreCategoria)
             };
 
             Label lblDisponible = new Label
@@ -324,29 +337,23 @@ namespace CapaPresentaciòn.Controles
                 AutoSize = true
             };
 
-            string rutaImagen = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Productos", prod.ImagenArchivo);
-
-            if (System.IO.File.Exists(rutaImagen))
+            Image? imagen = ObtenerImagen(prod.ImagenRuta);
+            if (imagen != null)
             {
                 PictureBox picProducto = new PictureBox
                 {
                     Dock = DockStyle.Fill,
                     SizeMode = PictureBoxSizeMode.Zoom,
-                    BackColor = Color.Transparent
+                    BackColor = Color.Transparent,
+                    Image = imagen
                 };
-
-                using (var fs = new System.IO.FileStream(rutaImagen, System.IO.FileMode.Open, System.IO.FileAccess.Read))
-                {
-                    picProducto.Image = Image.FromStream(fs);
-                }
-
                 pnlImagen.Controls.Add(picProducto);
             }
             else
             {
                 Label lblIconoCentral = new Label
                 {
-                    Text = prod.Categoria == "Bebidas Calientes" ? "☕" : prod.Categoria == "Bebidas Frías" ? "🥤" : "🥐",
+                    Text = prod.NombreCategoria == CatCalientes ? "☕" : prod.NombreCategoria == CatFrias ? "🥤" : "🥐",
                     Font = new Font("Segoe UI", 28F),
                     ForeColor = TemaCafeteria.CafePrimario,
                     Dock = DockStyle.Fill,
@@ -356,14 +363,6 @@ namespace CapaPresentaciòn.Controles
             }
 
             pnlImagen.Controls.Add(lblDisponible);
-            lblDisponible.BringToFront();
-
-
-
-
-
-            pnlImagen.Controls.Add(lblDisponible);
-
             lblDisponible.BringToFront();
 
             Label lblNombre = new Label
@@ -377,7 +376,7 @@ namespace CapaPresentaciòn.Controles
 
             Label lblDesc = new Label
             {
-                Text = prod.Descripcion,
+                Text = prod.NombreCategoria,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(12, 144),
@@ -411,10 +410,39 @@ namespace CapaPresentaciòn.Controles
             return card;
         }
 
+        /// <summary>
+        /// Carga la imagen una sola vez y la guarda en memoria (el catálogo se redibuja al cambiar de tamaño).
+        /// </summary>
+        private Image? ObtenerImagen(string? archivo)
+        {
+            if (string.IsNullOrWhiteSpace(archivo))
+                return null;
+
+            if (_cacheImagenes.TryGetValue(archivo, out var enCache))
+                return enCache;
+
+            string ruta = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Productos", archivo);
+            if (!File.Exists(ruta))
+                return null;
+
+            try
+            {
+                using var fs = new FileStream(ruta, FileMode.Open, FileAccess.Read);
+                using var original = Image.FromStream(fs);
+                var copia = new Bitmap(original);
+                _cacheImagenes[archivo] = copia;
+                return copia;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
         private static Color ObtenerColorFondoCategoria(string categoria) => categoria switch
         {
-            "Bebidas Calientes" => ColorTranslator.FromHtml("#EFE3D6"),
-            "Bebidas Frías" => ColorTranslator.FromHtml("#E3ECEB"),
+            CatCalientes => ColorTranslator.FromHtml("#EFE3D6"),
+            CatFrias => ColorTranslator.FromHtml("#E3ECEB"),
             _ => ColorTranslator.FromHtml("#F4E7DA")
         };
 
@@ -432,7 +460,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblNumComanda = new Label
             {
-                Text = $"COMANDA #{_numeroComanda:D4}",
+                Text = "NUEVA VENTA",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(22, 18),
@@ -450,7 +478,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblBadgeArticulos = new Label
             {
-                Text = "4 artículos",
+                Text = "0 artículos",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.CafePrimario,
                 BackColor = ColorTranslator.FromHtml("#F4ECE4"),
@@ -507,7 +535,6 @@ namespace CapaPresentaciòn.Controles
             cardEfectivo.Controls.AddRange(new Control[] { lblEfTit, lblEfSub, lblCheck });
 
             // Monto recibido y Cambio
-            // Monto recibido y Cambio
             Label lblMontoTit = new Label
             {
                 Text = "MONTO RECIBIDO",
@@ -521,7 +548,7 @@ namespace CapaPresentaciòn.Controles
             {
                 Name = "pnlMonto",
                 Location = new Point(20, 170),
-                Size = new Size(215, 48), // Subimos de 42 a 48 px de alto
+                Size = new Size(215, 48),
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -538,12 +565,12 @@ namespace CapaPresentaciòn.Controles
 
             _txtMontoRecibido = new TextBox
             {
-                Text = "300",
+                Text = "",
                 BorderStyle = BorderStyle.None,
                 Font = new Font("Segoe UI", 11F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 BackColor = Color.White,
-                Location = new Point(38, 11), // Antes estaba en 28; en 38 ya no lo tapa el signo $
+                Location = new Point(38, 11),
                 Width = 125,
                 Height = 28
             };
@@ -565,18 +592,18 @@ namespace CapaPresentaciòn.Controles
             {
                 Name = "cardCambio",
                 Location = new Point(246, 170),
-                Height = 48, // Misma altura de 48 px que pnlMonto
+                Height = 48,
                 RadioBorde = 10,
                 BackColor = ColorTranslator.FromHtml("#EAF3EE")
             };
             Label lblCambioTit = new Label { Text = "Cambio", Font = new Font("Segoe UI", 8F), ForeColor = TemaCafeteria.SemaforoVerde, Location = new Point(10, 5), AutoSize = true };
-            _lblCambioValor = new Label { Text = "$88.00", Font = new Font("Segoe UI", 10.5F, FontStyle.Bold), ForeColor = TemaCafeteria.SemaforoVerde, Location = new Point(10, 22), AutoSize = true };
+            _lblCambioValor = new Label { Text = "$0.00", Font = new Font("Segoe UI", 10.5F, FontStyle.Bold), ForeColor = TemaCafeteria.SemaforoVerde, Location = new Point(10, 22), AutoSize = true };
             cardCambio.Controls.AddRange(new Control[] { lblCambioTit, _lblCambioValor });
 
             // Botón Confirmar venta
             _btnConfirmarVenta = new Button
             {
-                Text = "✓  Confirmar venta   —   $212.00",
+                Text = "✓  Confirmar venta   —   $0.00",
                 Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = TemaCafeteria.CafePrimario,
@@ -605,9 +632,13 @@ namespace CapaPresentaciòn.Controles
             });
         }
 
-        private void AgregarProductoAComanda(ProductoMock prod)
+        // =====================================================================
+        // COMANDA
+        // =====================================================================
+
+        private void AgregarProductoAComanda(Ent.Producto prod)
         {
-            var existente = _comandaActual.FirstOrDefault(i => i.Producto.Nombre == prod.Nombre);
+            var existente = _comandaActual.FirstOrDefault(i => i.Producto.IdProducto == prod.IdProducto);
             if (existente != null)
             {
                 existente.Cantidad++;
@@ -759,7 +790,7 @@ namespace CapaPresentaciòn.Controles
                 _lblTotalValor.Location = new Point(pnlCobro.Width - _lblTotalValor.Width - 22, 34);
             }
 
-            if (decimal.TryParse(_txtMontoRecibido.Text, out decimal recibido))
+            if (TryParseMonto(_txtMontoRecibido.Text, out decimal recibido))
             {
                 decimal cambio = recibido - total;
                 if (cambio >= 0)
@@ -776,8 +807,13 @@ namespace CapaPresentaciòn.Controles
             else
             {
                 _lblCambioValor.Text = "$0.00";
+                _lblCambioValor.ForeColor = TemaCafeteria.SemaforoVerde;
             }
         }
+
+        // =====================================================================
+        // COBRO
+        // =====================================================================
 
         private void BtnConfirmarVenta_Click(object? sender, EventArgs e)
         {
@@ -788,28 +824,66 @@ namespace CapaPresentaciòn.Controles
             }
 
             decimal total = _comandaActual.Sum(i => i.Importe);
-            if (!decimal.TryParse(_txtMontoRecibido.Text, out decimal recibido) || recibido < total)
+            if (!TryParseMonto(_txtMontoRecibido.Text, out decimal recibido) || recibido < total)
             {
                 MessageBox.Show("El monto recibido en efectivo debe cubrir el total de la venta.", "Cobro insuficiente", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtMontoRecibido.Focus();
                 return;
             }
 
-            decimal cambio = recibido - total;
-            MessageBox.Show(
-                $"Venta #{_numeroComanda:D4} registrada con éxito.\n\n" +
-                $"• Total cobrado: {total.ToString("C2", _culturaMxn)}\n" +
-                $"• Cambio a entregar: {cambio.ToString("C2", _culturaMxn)}\n" +
-                $"• Inventario descontado bajo método PEPS.",
-                "Venta Confirmada",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            var productos = _comandaActual
+                .Select(i => (i.Producto.IdProducto, i.Cantidad))
+                .ToList();
 
-            _numeroComanda++;
-            _lblNumComanda.Text = $"COMANDA #{_numeroComanda:D4}";
-            _comandaActual.Clear();
-            _txtMontoRecibido.Clear();
-            RefrescarComanda();
+            _btnConfirmarVenta.Enabled = false;
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                var resultado = _ventaNegocio.RegistrarVenta(productos, "Efectivo", recibido);
+
+                if (!resultado.Exito || resultado.Venta == null)
+                {
+                    MessageBox.Show(resultado.Mensaje, "No se pudo registrar la venta", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var venta = resultado.Venta;
+                _ultimoFolio = venta.Folio;
+
+                MessageBox.Show(
+                    $"Venta {venta.Folio} registrada con éxito.\n\n" +
+                    $"• Total cobrado: {venta.Total.ToString("C2", _culturaMxn)}\n" +
+                    $"• Recibido: {recibido.ToString("C2", _culturaMxn)}\n" +
+                    $"• Cambio a entregar: {(venta.Cambio ?? 0m).ToString("C2", _culturaMxn)}\n" +
+                    $"• Inventario descontado bajo método PEPS.",
+                    "Venta confirmada",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+
+                _lblNumComanda.Text = $"NUEVA VENTA  ·  ÚLTIMA: {_ultimoFolio}";
+                _comandaActual.Clear();
+                _txtMontoRecibido.Clear();
+
+                // Recargar por si el administrador cambió precios o productos
+                CargarCatalogo();
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+                _btnConfirmarVenta.Enabled = true;
+            }
         }
+
+        /// <summary>Acepta "300", "300.50" o "300,50".</summary>
+        private static bool TryParseMonto(string texto, out decimal valor)
+        {
+            string limpio = texto.Trim().Replace("$", "").Replace(" ", "").Replace(',', '.');
+            return decimal.TryParse(limpio, NumberStyles.Number, CultureInfo.InvariantCulture, out valor);
+        }
+
+        // =====================================================================
+        // LAYOUT
+        // =====================================================================
 
         private void AjustarLayoutResponsivo()
         {
@@ -884,4 +958,4 @@ namespace CapaPresentaciòn.Controles
             RefrescarComanda();
         }
     }
-    }
+}

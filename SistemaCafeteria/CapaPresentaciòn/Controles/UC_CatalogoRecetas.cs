@@ -1,41 +1,38 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using CapaLogica;
 using CapaPresentacion.Estilos;
 using CapaPresentaciòn.Estilos;
+using Ent = CapaEntidades;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
     public partial class UC_CatalogoRecetas : UserControl
     {
-        private class IngredienteRecetaMock
-        {
-            public string Insumo { get; set; } = "";
-            public decimal Cantidad { get; set; }
-            public string Unidad { get; set; } = "";
-            public decimal CostoUnitarioReferencia { get; set; }
-            public decimal SubtotalCosto => Math.Round(Cantidad * CostoUnitarioReferencia, 2);
-        }
+        private const string TodasLasCategorias = "Todas las categorías";
 
-        private class ProductoAdminMock
-        {
-            public string Nombre { get; set; } = "";
-            public string Descripcion { get; set; } = "";
-            public string Categoria { get; set; } = "";
-            public decimal PrecioVenta { get; set; }
-            public string CodigoBarras { get; set; } = "-";
-            public string ImagenArchivo { get; set; } = "";
-            public bool Disponible { get; set; } = true;
-            public List<IngredienteRecetaMock> Receta { get; set; } = new();
-        }
-
-        private readonly List<ProductoAdminMock> _productos = new();
-        private ProductoAdminMock? _productoSeleccionado;
+        private readonly CatalogoNegocio _negocio = new();
         private readonly CultureInfo _culturaMxn = CultureInfo.GetCultureInfo("es-MX");
+
+        // Datos cargados desde MySQL
+        private List<Ent.Producto> _productos = new();
+        private List<Ent.Categoria> _categorias = new();
+        private List<Ent.Insumo> _insumos = new();
+        private Dictionary<int, Ent.UnidadMedida> _unidades = new();
+        private Dictionary<int, decimal> _costosReferencia = new();
+
+        // Estado de edición
+        private Ent.Producto? _productoSeleccionado;          // null = producto nuevo sin guardar
+        private List<Ent.DetalleReceta> _recetaEdicion = new();
+        private bool _recetaModificada;
+        private string? _imagenEdicion;
+        private bool _suprimirSeleccion;
 
         // Barra superior
         private Panel _pnlTopBar = null!;
@@ -71,316 +68,82 @@ namespace CapaPresentaciòn.Controles.Admin
 
         public UC_CatalogoRecetas()
         {
-            
-            InicializarCatalogoConRecetas();
             ConfigurarInterfaz();
-            FiltrarProductos();
 
-            if (_productos.Count > 0)
+            Load += (s, e) =>
             {
-                SeleccionarProducto(_productos[0]);
-            }
+                if (LicenseManager.UsageMode == LicenseUsageMode.Designtime || DesignMode)
+                    return;
+
+                CargarDatos();
+            };
         }
 
-        private void InicializarCatalogoConRecetas()
+        // =====================================================================
+        // CARGA DE DATOS DESDE MYSQL
+        // =====================================================================
+
+        private void CargarDatos(int? idSeleccionar = null)
         {
-            _productos.AddRange(new[]
+            try
             {
-                new ProductoAdminMock
-                {
-                    Nombre = "Cappuccino",
-                    Descripcion = "Espresso, leche y espuma",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 58.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "capuchino.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café en Grano", Cantidad = 0.018m, Unidad = "kg", CostoUnitarioReferencia = 340m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.220m, Unidad = "L", CostoUnitarioReferencia = 26m },
-                        new() { Insumo = "Vaso Desechable 12 oz", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 2.20m },
-                        new() { Insumo = "Tapa para Vaso", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 1.10m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Latte",
-                    Descripcion = "Espresso doble con leche vaporizada",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 60.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "latte.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café en Grano", Cantidad = 0.018m, Unidad = "kg", CostoUnitarioReferencia = 340m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.260m, Unidad = "L", CostoUnitarioReferencia = 26m },
-                        new() { Insumo = "Vaso Desechable 12 oz", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 2.20m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Americano",
-                    Descripcion = "Doble espresso y agua caliente",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 42.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "americano.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café en Grano", Cantidad = 0.018m, Unidad = "kg", CostoUnitarioReferencia = 340m },
-                        new() { Insumo = "Vaso Desechable 12 oz", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 2.20m },
-                        new() { Insumo = "Tapa para Vaso", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 1.10m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Espresso",
-                    Descripcion = "Carga intensa de café de especialidad",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 38.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "expresso.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café en Grano", Cantidad = 0.018m, Unidad = "kg", CostoUnitarioReferencia = 340m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Moka Caliente",
-                    Descripcion = "Chocolate, espresso y leche",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 68.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "mokaC.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café en Grano", Cantidad = 0.018m, Unidad = "kg", CostoUnitarioReferencia = 340m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.220m, Unidad = "L", CostoUnitarioReferencia = 26m },
-                        new() { Insumo = "Jarabe de Chocolate", Cantidad = 0.030m, Unidad = "L", CostoUnitarioReferencia = 145m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Chocolate Caliente",
-                    Descripcion = "Cacao artesanal y leche cremosa",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 56.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "chocolateC.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Cacao en Polvo", Cantidad = 0.025m, Unidad = "kg", CostoUnitarioReferencia = 210m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.250m, Unidad = "L", CostoUnitarioReferencia = 26m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Matcha Latte",
-                    Descripcion = "Té verde matcha ceremonial y leche",
-                    Categoria = "Bebidas Calientes",
-                    PrecioVenta = 65.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "MatchaLatte.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Té Matcha en Polvo", Cantidad = 0.012m, Unidad = "kg", CostoUnitarioReferencia = 680m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.240m, Unidad = "L", CostoUnitarioReferencia = 26m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Latte Frío",
-                    Descripcion = "Espresso, leche fría y hielo",
-                    Categoria = "Bebidas Frías",
-                    PrecioVenta = 64.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "LatteF.jpeg",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café en Grano", Cantidad = 0.018m, Unidad = "kg", CostoUnitarioReferencia = 340m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.220m, Unidad = "L", CostoUnitarioReferencia = 26m },
-                        new() { Insumo = "Hielo en Cubos", Cantidad = 0.150m, Unidad = "kg", CostoUnitarioReferencia = 12m },
-                        new() { Insumo = "Vaso Plástico Frío 16 oz", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 2.80m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Cold Brew",
-                    Descripcion = "Extracción en frío por 18 horas",
-                    Categoria = "Bebidas Frías",
-                    PrecioVenta = 55.00m,
-                    CodigoBarras = "7501002348112",
-                    ImagenArchivo = "ColdBrew.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Café Descafeinado", Cantidad = 0.025m, Unidad = "kg", CostoUnitarioReferencia = 350m },
-                        new() { Insumo = "Hielo en Cubos", Cantidad = 0.180m, Unidad = "kg", CostoUnitarioReferencia = 12m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Frappé Moka",
-                    Descripcion = "Café, cacao y crema batida",
-                    Categoria = "Bebidas Frías",
-                    PrecioVenta = 74.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "FrappeMoka.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Base Neutro Frappé", Cantidad = 0.045m, Unidad = "kg", CostoUnitarioReferencia = 160m },
-                        new() { Insumo = "Jarabe de Chocolate", Cantidad = 0.030m, Unidad = "L", CostoUnitarioReferencia = 145m },
-                        new() { Insumo = "Crema Batida", Cantidad = 0.035m, Unidad = "L", CostoUnitarioReferencia = 95m },
-                        new() { Insumo = "Hielo en Cubos", Cantidad = 0.200m, Unidad = "kg", CostoUnitarioReferencia = 12m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Matcha Iced Latte",
-                    Descripcion = "Té verde matcha frío y leche",
-                    Categoria = "Bebidas Frías",
-                    PrecioVenta = 68.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "MatchaIcedLatte.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Té Matcha en Polvo", Cantidad = 0.012m, Unidad = "kg", CostoUnitarioReferencia = 680m },
-                        new() { Insumo = "Leche Deslactosada", Cantidad = 0.220m, Unidad = "L", CostoUnitarioReferencia = 29m },
-                        new() { Insumo = "Hielo en Cubos", Cantidad = 0.150m, Unidad = "kg", CostoUnitarioReferencia = 12m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Chocolate Frío",
-                    Descripcion = "Cacao artesanal frío con hielo",
-                    Categoria = "Bebidas Frías",
-                    PrecioVenta = 58.00m,
-                    CodigoBarras = "-",
-                    ImagenArchivo = "ChocolateF.jpeg",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Cacao en Polvo", Cantidad = 0.025m, Unidad = "kg", CostoUnitarioReferencia = 210m },
-                        new() { Insumo = "Leche Entera", Cantidad = 0.230m, Unidad = "L", CostoUnitarioReferencia = 26m },
-                        new() { Insumo = "Hielo en Cubos", Cantidad = 0.150m, Unidad = "kg", CostoUnitarioReferencia = 12m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Galleta de Chocolate",
-                    Descripcion = "Chispas de chocolate semiamargo",
-                    Categoria = "Repostería",
-                    PrecioVenta = 32.00m,
-                    CodigoBarras = "7501234567817",
-                    ImagenArchivo = "GalletaCh.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Harina de Trigo", Cantidad = 0.060m, Unidad = "kg", CostoUnitarioReferencia = 24m },
-                        new() { Insumo = "Mantequilla Sin Sal", Cantidad = 0.025m, Unidad = "kg", CostoUnitarioReferencia = 180m },
-                        new() { Insumo = "Chispas de Chocolate", Cantidad = 0.030m, Unidad = "kg", CostoUnitarioReferencia = 195m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Brownie de Chocolate",
-                    Descripcion = "Intenso cacao con nuez tostada",
-                    Categoria = "Repostería",
-                    PrecioVenta = 48.00m,
-                    CodigoBarras = "7501234567824",
-                    ImagenArchivo = "BrowniedeCh.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Cacao en Polvo", Cantidad = 0.030m, Unidad = "kg", CostoUnitarioReferencia = 210m },
-                        new() { Insumo = "Mantequilla Sin Sal", Cantidad = 0.035m, Unidad = "kg", CostoUnitarioReferencia = 180m },
-                        new() { Insumo = "Huevo Blanco", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 3.20m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Cheesecake de Fresa",
-                    Descripcion = "Base de galleta con mermelada natural",
-                    Categoria = "Repostería",
-                    PrecioVenta = 65.00m,
-                    CodigoBarras = "7501234567831",
-                    ImagenArchivo = "CheesecakeFresa.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Queso Crema", Cantidad = 0.085m, Unidad = "kg", CostoUnitarioReferencia = 155m },
-                        new() { Insumo = "Mermelada de Fresa", Cantidad = 0.030m, Unidad = "kg", CostoUnitarioReferencia = 90m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Croissant Mantequilla",
-                    Descripcion = "Hojaldre francés recién horneado",
-                    Categoria = "Repostería",
-                    PrecioVenta = 45.00m,
-                    CodigoBarras = "7501234567893",
-                    ImagenArchivo = "CroissantM.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Harina de Trigo", Cantidad = 0.080m, Unidad = "kg", CostoUnitarioReferencia = 24m },
-                        new() { Insumo = "Mantequilla Sin Sal", Cantidad = 0.045m, Unidad = "kg", CostoUnitarioReferencia = 180m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Dona Glaseada",
-                    Descripcion = "Esponjosa con glaseado de vainilla",
-                    Categoria = "Repostería",
-                    PrecioVenta = 35.00m,
-                    CodigoBarras = "7501234567855",
-                    ImagenArchivo = "DonaGlaseada.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Harina de Trigo", Cantidad = 0.065m, Unidad = "kg", CostoUnitarioReferencia = 24m },
-                        new() { Insumo = "Azúcar Refinada", Cantidad = 0.025m, Unidad = "kg", CostoUnitarioReferencia = 28m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Muffin de Arándanos",
-                    Descripcion = "Horneado con arándanos frescos",
-                    Categoria = "Repostería",
-                    PrecioVenta = 44.00m,
-                    CodigoBarras = "7501234567862",
-                    ImagenArchivo = "MuffinArandanos.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Harina de Trigo", Cantidad = 0.070m, Unidad = "kg", CostoUnitarioReferencia = 24m },
-                        new() { Insumo = "Huevo Blanco", Cantidad = 1m, Unidad = "pza", CostoUnitarioReferencia = 3.20m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Panqué de Plátano",
-                    Descripcion = "Plátanos maduros con nuez",
-                    Categoria = "Repostería",
-                    PrecioVenta = 40.00m,
-                    CodigoBarras = "7501234567879",
-                    ImagenArchivo = "PanquedePlatano.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Harina de Trigo", Cantidad = 0.075m, Unidad = "kg", CostoUnitarioReferencia = 24m },
-                        new() { Insumo = "Canela Molida", Cantidad = 0.003m, Unidad = "kg", CostoUnitarioReferencia = 240m }
-                    }
-                },
-                new ProductoAdminMock
-                {
-                    Nombre = "Rol de Canela",
-                    Descripcion = "Glaseado cremoso de queso crema",
-                    Categoria = "Repostería",
-                    PrecioVenta = 52.00m,
-                    CodigoBarras = "7501234567886",
-                    ImagenArchivo = "RoldeC.png",
-                    Receta = new List<IngredienteRecetaMock>
-                    {
-                        new() { Insumo = "Harina de Trigo", Cantidad = 0.085m, Unidad = "kg", CostoUnitarioReferencia = 24m },
-                        new() { Insumo = "Canela Molida", Cantidad = 0.005m, Unidad = "kg", CostoUnitarioReferencia = 240m },
-                        new() { Insumo = "Queso Crema", Cantidad = 0.030m, Unidad = "kg", CostoUnitarioReferencia = 155m }
-                    }
-                }
-            });
+                Cursor = Cursors.WaitCursor;
+                _categorias = _negocio.ObtenerCategorias();
+                _insumos = _negocio.ObtenerInsumosParaReceta();
+                _unidades = _negocio.ObtenerUnidadesMedida().ToDictionary(u => u.IdUnidad);
+                _costosReferencia = _negocio.ObtenerCostosReferencia();
+                _productos = _negocio.ObtenerProductos(soloActivos: false);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo cargar el catálogo desde MySQL:\n{ex.Message}",
+                    "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
+
+            LlenarCombos();
+
+            int? id = idSeleccionar ?? _productoSeleccionado?.IdProducto ?? _productos.FirstOrDefault()?.IdProducto;
+            if (id.HasValue)
+                CargarProductoEnFicha(id.Value);
+            else
+                PrepararProductoNuevo();
+
+            FiltrarProductos();
         }
+
+        private void LlenarCombos()
+        {
+            string filtroActual = _cmbFiltroCat.SelectedItem?.ToString() ?? TodasLasCategorias;
+
+            _cmbFiltroCat.BeginUpdate();
+            _cmbFiltroCat.Items.Clear();
+            _cmbFiltroCat.Items.Add(TodasLasCategorias);
+            foreach (var c in _categorias)
+                _cmbFiltroCat.Items.Add(c.Nombre);
+            _cmbFiltroCat.EndUpdate();
+
+            int idx = _cmbFiltroCat.Items.IndexOf(filtroActual);
+            _cmbFiltroCat.SelectedIndex = idx >= 0 ? idx : 0;
+
+            _cmbCategoriaProd.Items.Clear();
+            foreach (var c in _categorias)
+                _cmbCategoriaProd.Items.Add(c.Nombre);
+
+            _cmbNuevoInsumo.Items.Clear();
+            foreach (var i in _insumos)
+                _cmbNuevoInsumo.Items.Add(i);
+            if (_cmbNuevoInsumo.Items.Count > 0)
+                _cmbNuevoInsumo.SelectedIndex = 0;
+        }
+
+        // =====================================================================
+        // CONSTRUCCIÓN DE LA INTERFAZ
+        // =====================================================================
 
         private void ConfigurarInterfaz()
         {
@@ -450,7 +213,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblTitCat = new Label
             {
-                Text = "Catálogo de productos (20)",
+                Text = "Catálogo de productos (0)",
                 Name = "lblTitCat",
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
@@ -497,7 +260,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 Location = new Point(20, 102),
                 Height = 32
             };
-            _cmbFiltroCat.Items.AddRange(new object[] { "Todas las categorías", "Bebidas Calientes", "Bebidas Frías", "Repostería" });
+            _cmbFiltroCat.Items.Add(TodasLasCategorias);
             _cmbFiltroCat.SelectedIndex = 0;
             _cmbFiltroCat.SelectedIndexChanged += (s, e) => FiltrarProductos();
 
@@ -537,7 +300,9 @@ namespace CapaPresentaciòn.Controles.Admin
                 Padding = new Padding(6, 0, 6, 0)
             };
 
-            // Las 5 columnas exactas de tu diseño: Nombre | Categoría | Precio | Estado | Código de barras
+            // Columna oculta con el id real del producto en MySQL
+            _dgvProductos.Columns.Add(new DataGridViewTextBoxColumn { Name = "colProdId", HeaderText = "Id", Visible = false });
+            // Columnas visibles: Nombre | Categoría | Precio | Estado | Código de barras
             _dgvProductos.Columns.Add(new DataGridViewTextBoxColumn { Name = "colProdNombre", HeaderText = "Nombre", FillWeight = 28 });
             _dgvProductos.Columns.Add(new DataGridViewTextBoxColumn { Name = "colProdCat", HeaderText = "Categoría", FillWeight = 22 });
             _dgvProductos.Columns.Add(new DataGridViewTextBoxColumn { Name = "colProdPrecio", HeaderText = "Precio", FillWeight = 15 });
@@ -557,12 +322,16 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _dgvProductos.SelectionChanged += (s, e) =>
             {
-                if (_dgvProductos.SelectedRows.Count > 0)
-                {
-                    string nombre = _dgvProductos.SelectedRows[0].Cells["colProdNombre"].Value?.ToString() ?? "";
-                    var prod = _productos.FirstOrDefault(p => p.Nombre == nombre);
-                    if (prod != null) SeleccionarProducto(prod);
-                }
+                if (_suprimirSeleccion || _dgvProductos.SelectedRows.Count == 0)
+                    return;
+
+                if (_dgvProductos.SelectedRows[0].Cells["colProdId"].Value is not int id)
+                    return;
+
+                if (_productoSeleccionado?.IdProducto == id)
+                    return;
+
+                CargarProductoEnFicha(id);
             };
 
             _cardCatalogo.Controls.AddRange(new Control[] { lblTitCat, lblSubPrecios, _btnNuevoProducto, _txtBuscarProd, _cmbFiltroCat, _dgvProductos });
@@ -576,15 +345,18 @@ namespace CapaPresentaciòn.Controles.Admin
                 BackColor = Color.White
             };
 
-            // Vista previa de foto
+            // Vista previa de foto (clic para cambiarla)
             _picProducto = new PictureBox
             {
                 Location = new Point(24, 22),
                 Size = new Size(118, 126),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = ColorTranslator.FromHtml("#F7F3EE"),
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.FixedSingle,
+                Cursor = Cursors.Hand
             };
+            _picProducto.Click += (s, e) => SeleccionarImagen();
+            new ToolTip().SetToolTip(_picProducto, "Haz clic para elegir la imagen del producto");
 
             Label lblNom = new Label { Text = "Nombre del producto", Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ForeColor = TemaCafeteria.TextoSecundario, Location = new Point(156, 18), AutoSize = true };
             _txtNombreProd = new TextBox { Font = new Font("Segoe UI", 10F, FontStyle.Bold), Location = new Point(156, 38), Width = 220 };
@@ -593,17 +365,17 @@ namespace CapaPresentaciòn.Controles.Admin
             _txtCodigoBarras = new TextBox
             {
                 Font = new Font("Segoe UI", 10F, FontStyle.Regular),
-                PlaceholderText = "Ej. 7501234567893 o -",
+                PlaceholderText = "Opcional, ej. 7501234567893",
                 Location = new Point(390, 38),
                 Width = 180
             };
 
             Label lblCat = new Label { Text = "Categoría", Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ForeColor = TemaCafeteria.TextoSecundario, Location = new Point(156, 74), AutoSize = true };
             _cmbCategoriaProd = new ComboBox { Font = new Font("Segoe UI", 9.5F), DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(156, 94), Width = 155 };
-            _cmbCategoriaProd.Items.AddRange(new object[] { "Bebidas Calientes", "Bebidas Frías", "Repostería" });
 
             Label lblPrec = new Label { Text = "Precio ($)", Font = new Font("Segoe UI", 8.5F, FontStyle.Bold), ForeColor = TemaCafeteria.TextoSecundario, Location = new Point(322, 74), AutoSize = true };
             _txtPrecioProd = new TextBox { Font = new Font("Segoe UI", 10F, FontStyle.Bold), Location = new Point(322, 94), Width = 82 };
+            _txtPrecioProd.TextChanged += (s, e) => RefrescarTablaReceta();
 
             _chkDisponible = new CheckBox
             {
@@ -647,12 +419,9 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 9.5F),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Location = new Point(24, 204),
-                Width = 225
+                Width = 225,
+                DisplayMember = "Nombre"
             };
-            foreach (var ins in CatalogoInsumosMock.ListaIngredientes)
-            {
-                _cmbNuevoInsumo.Items.Add(ins.Nombre);
-            }
 
             _txtCantidadInsumo = new TextBox
             {
@@ -664,7 +433,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblUnidadInsumo = new Label
             {
-                Text = "kg",
+                Text = "",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(362, 208),
@@ -673,12 +442,8 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _cmbNuevoInsumo.SelectedIndexChanged += (s, e) =>
             {
-                if (_lblUnidadInsumo == null) return;
-                string sel = _cmbNuevoInsumo.SelectedItem?.ToString() ?? "";
-                var loteInfo = CatalogoInsumosMock.ObtenerLotesIniciales().FirstOrDefault(l => l.Insumo == sel);
-                _lblUnidadInsumo.Text = loteInfo != null ? loteInfo.Unidad : "kg";
+                _lblUnidadInsumo.Text = (_cmbNuevoInsumo.SelectedItem as Ent.Insumo)?.UnidadAbreviatura ?? "";
             };
-            if (_cmbNuevoInsumo.Items.Count > 0) _cmbNuevoInsumo.SelectedIndex = 0;
 
             _btnAgregarInsumo = new Button
             {
@@ -736,9 +501,12 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _dgvReceta.CellContentClick += (s, e) =>
             {
-                if (_productoSeleccionado != null && e.RowIndex >= 0 && e.ColumnIndex == _dgvReceta.Columns["colRecQuitar"]!.Index)
+                if (e.RowIndex >= 0
+                    && e.RowIndex < _recetaEdicion.Count
+                    && e.ColumnIndex == _dgvReceta.Columns["colRecQuitar"]!.Index)
                 {
-                    _productoSeleccionado.Receta.RemoveAt(e.RowIndex);
+                    _recetaEdicion.RemoveAt(e.RowIndex);
+                    _recetaModificada = true;
                     RefrescarTablaReceta();
                 }
             };
@@ -746,7 +514,7 @@ namespace CapaPresentaciòn.Controles.Admin
             // Pie financiero de la receta
             _lblCostoRecetaVal = new Label
             {
-                Text = "Costo insumos: $0.00",
+                Text = "Costo estimado de receta: $0.00",
                 Font = new Font("Segoe UI", 10F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 AutoSize = true
@@ -754,7 +522,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblMargenVal = new Label
             {
-                Text = "Margen bruto: 0%",
+                Text = "Utilidad bruta: $0.00 (0%)",
                 Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.SemaforoVerde,
                 AutoSize = true
@@ -770,165 +538,457 @@ namespace CapaPresentaciòn.Controles.Admin
             });
         }
 
+        // =====================================================================
+        // LISTA DE PRODUCTOS
+        // =====================================================================
+
         private void FiltrarProductos()
         {
-            string texto = _txtBuscarProd.Text.Trim().ToLowerInvariant();
-            string cat = _cmbFiltroCat.SelectedItem?.ToString() ?? "Todas las categorías";
+            if (_dgvProductos == null)
+                return;
 
+            string texto = _txtBuscarProd.Text.Trim().ToLowerInvariant();
+            string cat = _cmbFiltroCat.SelectedItem?.ToString() ?? TodasLasCategorias;
+
+            _suprimirSeleccion = true;
             _dgvProductos.Rows.Clear();
             int conteo = 0;
 
             foreach (var p in _productos)
             {
-                if (cat != "Todas las categorías" && p.Categoria != cat) continue;
+                if (cat != TodasLasCategorias && p.NombreCategoria != cat)
+                    continue;
+
+                string codigo = p.CodigoBarras ?? string.Empty;
 
                 if (!string.IsNullOrEmpty(texto))
                 {
                     bool coincideNombre = p.Nombre.ToLowerInvariant().Contains(texto);
-                    bool coincideCodigo = p.CodigoBarras.ToLowerInvariant().Contains(texto);
-                    if (!coincideNombre && !coincideCodigo) continue;
+                    bool coincideCodigo = codigo.ToLowerInvariant().Contains(texto);
+                    if (!coincideNombre && !coincideCodigo)
+                        continue;
                 }
 
+                string estado = p.Estado != "Activo"
+                    ? "Inactivo"
+                    : (p.IdVersionRecetaActiva.HasValue ? "Activo" : "Sin receta");
+
                 _dgvProductos.Rows.Add(
+                    p.IdProducto,
                     p.Nombre,
-                    p.Categoria,
-                    p.PrecioVenta.ToString("C2", _culturaMxn),
-                    p.Disponible ? "Activo" : "Inactivo",
-                    string.IsNullOrWhiteSpace(p.CodigoBarras) ? "-" : p.CodigoBarras
+                    p.NombreCategoria,
+                    p.Precio.ToString("C2", _culturaMxn),
+                    estado,
+                    string.IsNullOrWhiteSpace(codigo) ? "-" : codigo
                 );
                 conteo++;
             }
+
+            // Volver a marcar el producto que se está editando (sin recargarlo)
+            _dgvProductos.ClearSelection();
+            if (_productoSeleccionado != null)
+            {
+                foreach (DataGridViewRow row in _dgvProductos.Rows)
+                {
+                    if (row.Cells["colProdId"].Value is int id && id == _productoSeleccionado.IdProducto)
+                    {
+                        _dgvProductos.CurrentCell = row.Cells["colProdNombre"];
+                        row.Selected = true;
+                        break;
+                    }
+                }
+            }
+            _suprimirSeleccion = false;
 
             if (_cardCatalogo.Controls["lblTitCat"] is Label lbl)
                 lbl.Text = $"Catálogo de productos ({conteo})";
         }
 
-        private void SeleccionarProducto(ProductoAdminMock prod)
+        // =====================================================================
+        // FICHA DEL PRODUCTO
+        // =====================================================================
+
+        private void CargarProductoEnFicha(int idProducto)
         {
+            Ent.Producto? prod;
+            try
+            {
+                prod = _negocio.ObtenerProductoConReceta(idProducto);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo cargar el producto desde MySQL:\n{ex.Message}",
+                    "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (prod == null)
+                return;
+
             _productoSeleccionado = prod;
             _txtNombreProd.Text = prod.Nombre;
-            _txtCodigoBarras.Text = prod.CodigoBarras;
-            _cmbCategoriaProd.SelectedItem = prod.Categoria;
-            _txtPrecioProd.Text = prod.PrecioVenta.ToString("0.00", CultureInfo.InvariantCulture);
-            _chkDisponible.Checked = prod.Disponible;
+            _txtCodigoBarras.Text = prod.CodigoBarras ?? string.Empty;
+            _cmbCategoriaProd.SelectedItem = prod.NombreCategoria;
+            _txtPrecioProd.Text = prod.Precio.ToString("0.00", CultureInfo.InvariantCulture);
+            _chkDisponible.Checked = prod.Estado == "Activo";
 
-            string rutaImg = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Productos", prod.ImagenArchivo);
-            if (!string.IsNullOrEmpty(prod.ImagenArchivo) && File.Exists(rutaImg))
-            {
-                using var fs = new FileStream(rutaImg, FileMode.Open, FileAccess.Read);
-                _picProducto.Image = Image.FromStream(fs);
-            }
-            else
-            {
-                _picProducto.Image = null;
-            }
+            _imagenEdicion = prod.ImagenRuta;
+            MostrarImagen(_imagenEdicion);
+
+            // Copia de trabajo de la receta (no se guarda hasta presionar "Guardar")
+            _recetaEdicion = prod.RecetaActiva
+                .Select(d => new Ent.DetalleReceta
+                {
+                    IdInsumo = d.IdInsumo,
+                    IdUnidad = d.IdUnidad,
+                    Cantidad = d.Cantidad,
+                    NombreInsumo = d.NombreInsumo,
+                    UnidadAbreviatura = d.UnidadAbreviatura
+                })
+                .ToList();
+            _recetaModificada = false;
 
             RefrescarTablaReceta();
         }
 
+        private void PrepararProductoNuevo()
+        {
+            _productoSeleccionado = null;
+
+            _suprimirSeleccion = true;
+            _dgvProductos.ClearSelection();
+            _suprimirSeleccion = false;
+
+            _txtNombreProd.Text = string.Empty;
+            _txtCodigoBarras.Text = string.Empty;
+            _txtPrecioProd.Text = string.Empty;
+            _cmbCategoriaProd.SelectedIndex = _cmbCategoriaProd.Items.Count > 0 ? 0 : -1;
+            _chkDisponible.Checked = true;
+
+            _imagenEdicion = null;
+            MostrarImagen(null);
+
+            _recetaEdicion = new List<Ent.DetalleReceta>();
+            _recetaModificada = false;
+            RefrescarTablaReceta();
+
+            _txtNombreProd.Focus();
+        }
+
+        private void MostrarImagen(string? archivo)
+        {
+            var anterior = _picProducto.Image;
+            _picProducto.Image = null;
+            anterior?.Dispose();
+
+            if (string.IsNullOrWhiteSpace(archivo))
+                return;
+
+            string ruta = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Productos", archivo);
+            if (!File.Exists(ruta))
+                return;
+
+            try
+            {
+                // Se copia a un Bitmap en memoria para no dejar el archivo bloqueado
+                using var fs = new FileStream(ruta, FileMode.Open, FileAccess.Read);
+                using var img = Image.FromStream(fs);
+                _picProducto.Image = new Bitmap(img);
+            }
+            catch (Exception)
+            {
+                _picProducto.Image = null;
+            }
+        }
+
+        private void SeleccionarImagen()
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title = "Selecciona la imagen del producto",
+                Filter = "Imágenes|*.png;*.jpg;*.jpeg;*.bmp"
+            };
+
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                string carpeta = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Productos");
+                Directory.CreateDirectory(carpeta);
+
+                string nombreArchivo = Path.GetFileName(dlg.FileName);
+                string destino = Path.Combine(carpeta, nombreArchivo);
+
+                if (!string.Equals(Path.GetFullPath(dlg.FileName), Path.GetFullPath(destino), StringComparison.OrdinalIgnoreCase))
+                    File.Copy(dlg.FileName, destino, overwrite: true);
+
+                _imagenEdicion = nombreArchivo;
+                MostrarImagen(nombreArchivo);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo copiar la imagen:\n{ex.Message}",
+                    "Imagen", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // =====================================================================
+        // RECETA
+        // =====================================================================
+
         private void RefrescarTablaReceta()
         {
+            if (_dgvReceta == null)
+                return;
+
             _dgvReceta.Rows.Clear();
-            if (_productoSeleccionado == null) return;
 
             decimal costoTotal = 0m;
-            foreach (var item in _productoSeleccionado.Receta)
+            bool faltanCostos = false;
+
+            foreach (var item in _recetaEdicion)
             {
+                decimal? costo = CalcularCostoLinea(item);
+                if (costo.HasValue)
+                    costoTotal += costo.Value;
+                else
+                    faltanCostos = true;
+
                 _dgvReceta.Rows.Add(
-                    item.Insumo,
-                    item.Cantidad.ToString("0.###"),
-                    item.Unidad,
-                    item.SubtotalCosto.ToString("C2", _culturaMxn),
+                    item.NombreInsumo,
+                    item.Cantidad.ToString("0.###", CultureInfo.InvariantCulture),
+                    item.UnidadAbreviatura,
+                    costo.HasValue ? costo.Value.ToString("C2", _culturaMxn) : "Sin lotes",
                     "Quitar"
                 );
-                costoTotal += item.SubtotalCosto;
             }
 
-            decimal margen = _productoSeleccionado.PrecioVenta > 0
-                ? ((_productoSeleccionado.PrecioVenta - costoTotal) / _productoSeleccionado.PrecioVenta) * 100m
-                : 0m;
+            decimal precio = TryParseDecimal(_txtPrecioProd.Text, out decimal p) ? p : 0m;
+            decimal utilidad = precio - costoTotal;
+            decimal margen = precio > 0 ? (utilidad / precio) * 100m : 0m;
 
-            _lblCostoRecetaVal.Text = $"Costo estimado de receta: {costoTotal.ToString("C2", _culturaMxn)}";
-            _lblMargenVal.Text = $"Utilidad bruta: {(_productoSeleccionado.PrecioVenta - costoTotal).ToString("C2", _culturaMxn)} ({margen:N1}%)";
+            _lblCostoRecetaVal.Text = $"Costo estimado de receta: {costoTotal.ToString("C2", _culturaMxn)}"
+                                      + (faltanCostos ? " (algunos insumos sin lotes)" : string.Empty);
+            _lblMargenVal.Text = $"Utilidad bruta: {utilidad.ToString("C2", _culturaMxn)} ({margen:N1}%)";
+            _lblMargenVal.ForeColor = utilidad >= 0 ? TemaCafeteria.SemaforoVerde : ColorTranslator.FromHtml("#C62828");
+
+            if (_cardDetalle != null && _cardDetalle.Width > 0)
+                _lblMargenVal.Left = _cardDetalle.Width - _lblMargenVal.Width - 28;
+        }
+
+        /// <summary>
+        /// Costo de una línea de receta usando el costo promedio de los lotes del insumo.
+        /// Devuelve null si el insumo todavía no tiene lotes registrados.
+        /// </summary>
+        private decimal? CalcularCostoLinea(Ent.DetalleReceta linea)
+        {
+            if (!_costosReferencia.TryGetValue(linea.IdInsumo, out decimal costoReferencia))
+                return null;
+
+            decimal factor = 1m;
+            var insumo = _insumos.FirstOrDefault(i => i.IdInsumo == linea.IdInsumo);
+            if (insumo != null
+                && _unidades.TryGetValue(linea.IdUnidad, out var unidadReceta)
+                && _unidades.TryGetValue(insumo.IdUnidad, out var unidadInsumo))
+            {
+                factor = CatalogoNegocio.FactorConversion(unidadReceta, unidadInsumo);
+            }
+
+            return Math.Round(linea.Cantidad * factor * costoReferencia, 2);
         }
 
         private void BtnAgregarInsumo_Click(object? sender, EventArgs e)
         {
-            if (_productoSeleccionado == null) return;
+            if (_cmbNuevoInsumo.SelectedItem is not Ent.Insumo insumo)
+            {
+                MessageBox.Show("Selecciona un insumo de la lista.", "Insumo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-            if (!decimal.TryParse(_txtCantidadInsumo.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cant) || cant <= 0)
+            if (!TryParseDecimal(_txtCantidadInsumo.Text, out decimal cantidad) || cantidad <= 0)
             {
                 MessageBox.Show("Ingresa una cantidad válida mayor a cero (por ejemplo: 0.020).", "Cantidad inválida", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            string insumo = _cmbNuevoInsumo.SelectedItem?.ToString() ?? "";
-            string unidad = _lblUnidadInsumo.Text;
-
-            var existente = _productoSeleccionado.Receta.FirstOrDefault(r => r.Insumo == insumo);
+            var existente = _recetaEdicion.FirstOrDefault(r => r.IdInsumo == insumo.IdInsumo);
             if (existente != null)
             {
-                existente.Cantidad += cant;
+                // Si la línea existente está en otra unidad, se convierte antes de sumar
+                decimal factor = 1m;
+                if (_unidades.TryGetValue(insumo.IdUnidad, out var uInsumo)
+                    && _unidades.TryGetValue(existente.IdUnidad, out var uExistente))
+                {
+                    factor = CatalogoNegocio.FactorConversion(uInsumo, uExistente);
+                }
+                existente.Cantidad += cantidad * factor;
             }
             else
             {
-                _productoSeleccionado.Receta.Add(new IngredienteRecetaMock
+                _recetaEdicion.Add(new Ent.DetalleReceta
                 {
-                    Insumo = insumo,
-                    Cantidad = cant,
-                    Unidad = unidad,
-                    CostoUnitarioReferencia = 45.00m
+                    IdInsumo = insumo.IdInsumo,
+                    IdUnidad = insumo.IdUnidad,
+                    Cantidad = cantidad,
+                    NombreInsumo = insumo.Nombre,
+                    UnidadAbreviatura = insumo.UnidadAbreviatura
                 });
             }
 
+            _recetaModificada = true;
             _txtCantidadInsumo.Clear();
             RefrescarTablaReceta();
         }
 
+        // =====================================================================
+        // BOTONES
+        // =====================================================================
+
+        private void BtnNuevoProducto_Click(object? sender, EventArgs e)
+        {
+            PrepararProductoNuevo();
+        }
+
         private void BtnGuardarProducto_Click(object? sender, EventArgs e)
         {
-            if (_productoSeleccionado == null) return;
+            string nombre = _txtNombreProd.Text.Trim();
 
-            if (!decimal.TryParse(_txtPrecioProd.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal nuevoPrecio) || nuevoPrecio <= 0)
+            if (!TryParseDecimal(_txtPrecioProd.Text, out decimal precio) || precio <= 0)
             {
                 MessageBox.Show("Ingresa un precio de venta válido.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            _productoSeleccionado.Nombre = _txtNombreProd.Text.Trim();
-            _productoSeleccionado.CodigoBarras = string.IsNullOrWhiteSpace(_txtCodigoBarras.Text) ? "-" : _txtCodigoBarras.Text.Trim();
-            _productoSeleccionado.Categoria = _cmbCategoriaProd.SelectedItem?.ToString() ?? "Bebidas Calientes";
-            _productoSeleccionado.PrecioVenta = nuevoPrecio;
-            _productoSeleccionado.Disponible = _chkDisponible.Checked;
+            string nombreCategoria = _cmbCategoriaProd.SelectedItem?.ToString() ?? string.Empty;
+            var categoria = _categorias.FirstOrDefault(c => c.Nombre == nombreCategoria);
+            if (categoria == null)
+            {
+                MessageBox.Show("Selecciona una categoría.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-            FiltrarProductos();
-            RefrescarTablaReceta();
+            string codigo = _txtCodigoBarras.Text.Trim();
+            bool esNuevo = _productoSeleccionado == null;
 
-            MessageBox.Show(
-                $"Cambios guardados para '{_productoSeleccionado.Nombre}'.\n" +
-                $"• Código de barras: {_productoSeleccionado.CodigoBarras}\n" +
-                $"• Precio: {nuevoPrecio.ToString("C2", _culturaMxn)}\n" +
-                $"• Ingredientes en receta: {_productoSeleccionado.Receta.Count}",
-                "Catálogo y Recetas Actualizados",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            var producto = new Ent.Producto
+            {
+                IdProducto = _productoSeleccionado?.IdProducto ?? 0,
+                IdCategoria = categoria.IdCategoria,
+                Nombre = nombre,
+                Precio = precio,
+                CodigoBarras = (codigo.Length == 0 || codigo == "-") ? null : codigo,
+                ImagenRuta = _imagenEdicion
+            };
+
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+
+                // 1. Guardar datos del producto (validaciones en CatalogoNegocio)
+                var resProducto = _negocio.GuardarProducto(producto);
+                if (!resProducto.Exito)
+                {
+                    MessageBox.Show(resProducto.Mensaje, "No se pudo guardar", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                int idProducto = resProducto.IdProducto;
+                bool huboAvisos = false;
+                var resumen = new List<string>
+                {
+                    $"• Producto: {nombre} — {precio.ToString("C2", _culturaMxn)}"
+                };
+
+                // 2. Estado Activo / Inactivo
+                bool estabaActivo = esNuevo || _productoSeleccionado!.Estado == "Activo";
+                if (_chkDisponible.Checked != estabaActivo)
+                {
+                    var resEstado = _negocio.CambiarEstadoProducto(idProducto, _chkDisponible.Checked);
+                    if (!resEstado.Exito)
+                        huboAvisos = true;
+
+                    resumen.Add(resEstado.Exito
+                        ? $"• Estado: {(_chkDisponible.Checked ? "Activo" : "Inactivo")}"
+                        : $"• Estado: {resEstado.Mensaje}");
+                }
+                else
+                {
+                    resumen.Add($"• Estado: {(_chkDisponible.Checked ? "Activo" : "Inactivo")}");
+                }
+
+                // 3. Receta (se guarda como versión nueva solo si cambió)
+                bool recetaGuardada = false;
+                if (_recetaModificada)
+                {
+                    if (_recetaEdicion.Count == 0)
+                    {
+                        huboAvisos = true;
+                        resumen.Add("• Receta: no se guardó porque está vacía.");
+                    }
+                    else
+                    {
+                        var resReceta = _negocio.GuardarReceta(idProducto, _recetaEdicion);
+                        recetaGuardada = resReceta.Exito;
+                        if (!resReceta.Exito)
+                            huboAvisos = true;
+
+                        resumen.Add(resReceta.Exito
+                            ? $"• Receta: nueva versión guardada ({_recetaEdicion.Count} ingredientes)"
+                            : $"• Receta: {resReceta.Mensaje}");
+                    }
+                }
+                else if (esNuevo || _productoSeleccionado?.IdVersionRecetaActiva == null)
+                {
+                    huboAvisos = true;
+                    resumen.Add("• Receta: sin ingredientes. Agrégalos para que aparezca en el Punto de Venta.");
+                }
+                else
+                {
+                    resumen.Add("• Receta: sin cambios");
+                }
+
+                // 4. Recargar desde MySQL, conservando la receta si no se pudo guardar
+                bool conservarReceta = _recetaModificada && !recetaGuardada;
+                var recetaPendiente = _recetaEdicion;
+
+                _productos = _negocio.ObtenerProductos(soloActivos: false);
+                CargarProductoEnFicha(idProducto);
+
+                if (conservarReceta)
+                {
+                    _recetaEdicion = recetaPendiente;
+                    _recetaModificada = true;
+                    RefrescarTablaReceta();
+                }
+
+                FiltrarProductos();
+
+                MessageBox.Show(
+                    string.Join("\n", resumen),
+                    huboAvisos ? "Guardado con avisos" : "Catálogo y recetas actualizados",
+                    MessageBoxButtons.OK,
+                    huboAvisos ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al guardar en MySQL:\n{ex.Message}",
+                    "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
         }
 
-        private void BtnNuevoProducto_Click(object? sender, EventArgs e)
+        // =====================================================================
+        // AUXILIARES
+        // =====================================================================
+
+        /// <summary>Acepta tanto "0.020" como "0,020".</summary>
+        private static bool TryParseDecimal(string texto, out decimal valor)
         {
-            var nuevo = new ProductoAdminMock
-            {
-                Nombre = $"Nuevo Producto {_productos.Count + 1}",
-                Descripcion = "Producto agregado desde catálogo",
-                Categoria = "Bebidas Calientes",
-                PrecioVenta = 50.00m,
-                CodigoBarras = "-",
-                Disponible = true
-            };
-            _productos.Add(nuevo);
-            FiltrarProductos();
-            SeleccionarProducto(nuevo);
+            return decimal.TryParse(texto.Trim().Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out valor);
         }
 
         private void AjustarLayoutResponsivo()

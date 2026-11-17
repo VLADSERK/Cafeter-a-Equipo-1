@@ -24,11 +24,14 @@ namespace CapaLogica
 
             try
             {
-                _datos.ResolverMerma(idMerma, SesionActual.IdUsuario, aprobar, observaciones);
+                var resultado = _datos.ResolverMerma(idMerma, SesionActual.IdUsuario, aprobar, observaciones);
+
+                if (!resultado.Exito)
+                    return (false, resultado.Mensaje);
+
                 string accion = aprobar ? "autorizada y aplicada al inventario" : "rechazada";
                 return (true, $"La merma #MRM-{idMerma:000} fue {accion} exitosamente.");
             }
-            
             catch (Exception ex)
             {
                 return (false, $"Error al procesar la autorización en MySQL:\n{ex.Message}");

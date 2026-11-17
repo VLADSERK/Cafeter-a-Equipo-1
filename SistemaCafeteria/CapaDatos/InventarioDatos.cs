@@ -78,21 +78,21 @@ namespace CapaDatos
         {
             var lista = new List<Insumo>();
             const string sql = @"
-        SELECT i.id_insumo,
-               i.id_unidad,
-               i.categoria,
-               i.nombre,
-               i.stock_minimo,
-               i.stock_maximo,
-               i.estado,
-               u.abreviatura AS unidad_abrev,
-               COALESCE(SUM(l.cantidad_disponible), 0) AS stock_actual
-        FROM Insumo i
-        INNER JOIN UnidadMedida u ON i.id_unidad = u.id_unidad
-        LEFT JOIN Lote l ON i.id_insumo = l.id_insumo AND l.cantidad_disponible > 0
-        WHERE i.estado = TRUE
-        GROUP BY i.id_insumo, i.id_unidad, i.categoria, i.nombre, i.stock_minimo, i.stock_maximo, i.estado, u.abreviatura
-        ORDER BY i.nombre ASC;";
+                SELECT i.id_insumo,
+                       i.id_unidad,
+                       i.categoria,
+                       i.nombre,
+                       i.stock_minimo,
+                       i.stock_maximo,
+                       i.estado,
+                       u.abreviatura AS unidad_abrev,
+                       COALESCE(SUM(l.cantidad_disponible), 0) AS stock_actual
+                FROM Insumo i
+                INNER JOIN UnidadMedida u ON i.id_unidad = u.id_unidad
+                LEFT JOIN Lote l ON i.id_insumo = l.id_insumo AND l.cantidad_disponible > 0
+                WHERE i.estado = TRUE
+                GROUP BY i.id_insumo, i.id_unidad, i.categoria, i.nombre, i.stock_minimo, i.stock_maximo, i.estado, u.abreviatura
+                ORDER BY i.nombre ASC;";
 
             using var conn = ConexionMySql.ObtenerConexion();
             using var cmd = new MySqlCommand(sql, conn);
@@ -119,9 +119,9 @@ namespace CapaDatos
         public int InsertarInsumo(Insumo insumo)
         {
             const string sql = @"
-        INSERT INTO Insumo (id_unidad, categoria, nombre, stock_minimo, stock_maximo, estado)
-        VALUES (@id_unidad, @categoria, @nombre, @stock_minimo, @stock_maximo, TRUE);
-        SELECT LAST_INSERT_ID();";
+                INSERT INTO Insumo (id_unidad, categoria, nombre, stock_minimo, stock_maximo, estado)
+                VALUES (@id_unidad, @categoria, @nombre, @stock_minimo, @stock_maximo, TRUE);
+                SELECT LAST_INSERT_ID();";
 
             using var conn = ConexionMySql.ObtenerConexion();
             using var cmd = new MySqlCommand(sql, conn);
@@ -241,7 +241,9 @@ namespace CapaDatos
                     cmdLote.Parameters.AddWithValue("@id_recepcion", idRecepcion);
                     cmdLote.Parameters.AddWithValue("@id_insumo", nuevoLote.IdInsumo);
                     cmdLote.Parameters.AddWithValue("@codigo_lote", nuevoLote.CodigoLote);
-                    cmdLote.Parameters.AddWithValue("@codigo_barras", nuevoLote.CodigoBarras);
+                    // NULL en vez de '' para no violar el índice UNIQUE de codigo_barras
+                    cmdLote.Parameters.AddWithValue("@codigo_barras",
+                        string.IsNullOrWhiteSpace(nuevoLote.CodigoBarras) ? DBNull.Value : (object)nuevoLote.CodigoBarras.Trim());
                     cmdLote.Parameters.AddWithValue("@fecha_recepcion", recepcion.FechaRecepcion);
                     cmdLote.Parameters.AddWithValue("@fecha_caducidad", (object?)nuevoLote.FechaCaducidad?.Date ?? DBNull.Value);
                     cmdLote.Parameters.AddWithValue("@cantidad_inicial", nuevoLote.CantidadInicial);
@@ -278,20 +280,19 @@ namespace CapaDatos
                 throw;
             }
         }
+
         public int ContarLotesHoyPorInsumo(int idInsumo)
         {
             const string sql = @"
-        SELECT COUNT(*)
-        FROM Lote
-        WHERE id_insumo = @id_insumo
-          AND DATE(fecha_recepcion) = CURDATE();";
+                SELECT COUNT(*)
+                FROM Lote
+                WHERE id_insumo = @id_insumo
+                  AND DATE(fecha_recepcion) = CURDATE();";
 
             using var conn = ConexionMySql.ObtenerConexion();
             using var cmd = new MySqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@id_insumo", idInsumo);
             return Convert.ToInt32(cmd.ExecuteScalar());
         }
-
     }
-    
-    }
+}
