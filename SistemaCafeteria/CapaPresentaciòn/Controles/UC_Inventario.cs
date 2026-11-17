@@ -1,4 +1,6 @@
-﻿using CapaPresentacion.Estilos;
+﻿using CapaEntidades;
+using CapaLogica;
+using CapaPresentacion.Estilos;
 using CapaPresentaciòn.Estilos;
 using System;
 using System.Collections.Generic;
@@ -10,9 +12,22 @@ namespace CapaPresentaciòn.Controles
 {
     public partial class UC_Inventario : UserControl
     {
-       
+        private readonly InventarioNegocio _invNegocio = new();
+        private readonly ConfiguracionNegocio _configNegocio = new();
 
-        private readonly List<LoteInventarioMock> _lotesMock = new();
+        private sealed class LoteFilaInventario
+        {
+            public string CodigoLote { get; init; } = string.Empty;
+            public string Insumo { get; init; } = string.Empty;
+            public string Categoria { get; init; } = string.Empty;
+            public decimal CantidadActual { get; init; }
+            public decimal StockMinimo { get; init; }
+            public string Unidad { get; init; } = string.Empty;
+            public DateTime? FechaCaducidad { get; init; }
+            public string EstadoSemaforo { get; init; } = "Optimo"; // Optimo | Preventivo | Critico
+        }
+
+        private readonly List<LoteFilaInventario> _lotesActivos = new();
         private string _filtroEstado = "Todos";
 
         // Barra superior
@@ -45,19 +60,70 @@ namespace CapaPresentaciòn.Controles
         public UC_Inventario()
         {
             InitializeComponent();
-            InicializarDatosMock();
             ConfigurarInterfazInventario();
-            ActualizarContadoresKpi();
-            AplicarFiltrosYRenderizar();
+            CargarInventarioDesdeMysql();
+
+            VisibleChanged += (s, e) =>
+            {
+                if (Visible) CargarInventarioDesdeMysql();
+            };
         }
 
-     
-           private void InicializarDatosMock()
+        public void CargarInventarioDesdeMysql()
         {
-            _lotesMock.Clear();
-            _lotesMock.AddRange(CatalogoInsumosMock.ObtenerLotesIniciales());
+            try
+            {
+                _lotesActivos.Clear();
+                var config = _configNegocio.ObtenerConfiguracionActual();
+                const int diasAlertaCad = 7;
+                var resumenes = _invNegocio.ObtenerResumenInventarioCompleto();
+
+                foreach (var res in resumenes)
+                {
+                    var insumo = res.Insumo;
+                    var semaforoInsumo = _invNegocio.CalcularSemaforo(
+                        insumo.StockActualTotal,
+                        insumo.StockMaximo,
+                        config);
+
+                    foreach (var lote in res.LotesActivos.Where(l => l.CantidadDisponible > 0))
+                    {
+                        bool caducaPronto = lote.FechaCaducidad.HasValue &&
+                                            (lote.FechaCaducidad.Value.Date - DateTime.Today).TotalDays <= diasAlertaCad;
+
+                        string estadoFila = semaforoInsumo switch
+                        {
+                            NivelSemaforo.Rojo => "Critico",
+                            NivelSemaforo.Amarillo => "Preventivo",
+                            _ => caducaPronto ? "Preventivo" : "Optimo"
+                        };
+
+                        _lotesActivos.Add(new LoteFilaInventario
+                        {
+                            CodigoLote = lote.CodigoLote,
+                            Insumo = insumo.Nombre,
+                            Categoria = string.IsNullOrWhiteSpace(insumo.Categoria) ? "General" : insumo.Categoria,
+                            CantidadActual = lote.CantidadDisponible,
+                            StockMinimo = insumo.StockMinimo,
+                            Unidad = insumo.UnidadAbreviatura,
+                            FechaCaducidad = lote.FechaCaducidad,
+                            EstadoSemaforo = estadoFila
+                        });
+                    }
+                }
+
+                ActualizarContadoresKpi();
+                AplicarFiltrosYRenderizar();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"No se pudo cargar el inventario desde MySQL:\n{ex.Message}",
+                    "Error de conexión",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
-        
 
         private void ConfigurarInterfazInventario()
         {
@@ -98,7 +164,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblBadgeTotalLotes = new Label
             {
-                Text = "8 lotes activos (PEPS)",
+                Text = "0 lotes activos (PEPS)",
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.CafePrimario,
                 BackColor = ColorTranslator.FromHtml("#F4ECE4"),
@@ -142,7 +208,7 @@ namespace CapaPresentaciòn.Controles
 
             (_cardPreventivo, _lblCountPreventivo) = CrearTarjetaSemaforo(
                 "▲  ALERTA PREVENTIVA",
-                "Stock bajo o próximo a caducar (≤ 7 días)",
+                "Stock bajo o próximo a caducar",
                 ColorTranslator.FromHtml("#B26A00"),
                 ColorTranslator.FromHtml("#FFF4E5"));
 
@@ -343,13 +409,13 @@ namespace CapaPresentaciòn.Controles
             _dgvInventario.Columns.Add("colCaducidad", "CADUCIDAD");
             _dgvInventario.Columns.Add("colEstado", "SEMÁFORO");
 
-            _dgvInventario.Columns["colLote"].FillWeight = 18;
-            _dgvInventario.Columns["colInsumo"].FillWeight = 24;
-            _dgvInventario.Columns["colCategoria"].FillWeight = 14;
-            _dgvInventario.Columns["colExistencia"].FillWeight = 13;
-            _dgvInventario.Columns["colMinimo"].FillWeight = 11;
-            _dgvInventario.Columns["colCaducidad"].FillWeight = 12;
-            _dgvInventario.Columns["colEstado"].FillWeight = 13;
+            _dgvInventario.Columns["colLote"]!.FillWeight = 18;
+            _dgvInventario.Columns["colInsumo"]!.FillWeight = 24;
+            _dgvInventario.Columns["colCategoria"]!.FillWeight = 14;
+            _dgvInventario.Columns["colExistencia"]!.FillWeight = 13;
+            _dgvInventario.Columns["colMinimo"]!.FillWeight = 11;
+            _dgvInventario.Columns["colCaducidad"]!.FillWeight = 12;
+            _dgvInventario.Columns["colEstado"]!.FillWeight = 13;
 
             _dgvInventario.CellFormatting += DgvInventario_CellFormatting;
 
@@ -360,7 +426,7 @@ namespace CapaPresentaciòn.Controles
         {
             if (_dgvInventario.Columns[e.ColumnIndex].Name == "colEstado" && e.Value is string estadoTexto)
             {
-                e.CellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                e.CellStyle!.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
                 if (estadoTexto.Contains("Óptimo"))
                     e.CellStyle.ForeColor = ColorTranslator.FromHtml("#1F4E35");
                 else if (estadoTexto.Contains("Preventivo"))
@@ -370,33 +436,34 @@ namespace CapaPresentaciòn.Controles
             }
             else if (_dgvInventario.Columns[e.ColumnIndex].Name == "colLote")
             {
-                e.CellStyle.Font = new Font("Consolas", 9.5F, FontStyle.Bold);
+                e.CellStyle!.Font = new Font("Consolas", 9.5F, FontStyle.Bold);
             }
         }
 
         private void ActualizarContadoresKpi()
         {
-            int optimos = _lotesMock.Count(l => l.EstadoSemaforo == "Optimo");
-            int preventivos = _lotesMock.Count(l => l.EstadoSemaforo == "Preventivo");
-            int criticos = _lotesMock.Count(l => l.EstadoSemaforo == "Critico");
+            int optimos = _lotesActivos.Count(l => l.EstadoSemaforo == "Optimo");
+            int preventivos = _lotesActivos.Count(l => l.EstadoSemaforo == "Preventivo");
+            int criticos = _lotesActivos.Count(l => l.EstadoSemaforo == "Critico");
 
             _lblCountOptimo.Text = $"{optimos} {(optimos == 1 ? "lote" : "lotes")}";
             _lblCountPreventivo.Text = $"{preventivos} {(preventivos == 1 ? "lote" : "lotes")}";
             _lblCountCritico.Text = $"{criticos} {(criticos == 1 ? "lote" : "lotes")}";
-            _lblBadgeTotalLotes.Text = $"{_lotesMock.Count} lotes activos (PEPS)";
+            _lblBadgeTotalLotes.Text = $"{_lotesActivos.Count} lotes activos (PEPS)";
+            _lblBadgeTotalLotes.Location = new Point(_pnlTopBar.Width - _lblBadgeTotalLotes.Width - 34, 26);
         }
 
         private void AplicarFiltrosYRenderizar()
         {
             string busqueda = _txtBuscar.Text.Trim().ToLowerInvariant();
 
-            var filtrados = _lotesMock
+            var filtrados = _lotesActivos
                 .Where(l => _filtroEstado == "Todos" || l.EstadoSemaforo == _filtroEstado)
                 .Where(l => string.IsNullOrEmpty(busqueda) ||
                             l.Insumo.ToLowerInvariant().Contains(busqueda) ||
                             l.CodigoLote.ToLowerInvariant().Contains(busqueda) ||
                             l.Categoria.ToLowerInvariant().Contains(busqueda))
-                .OrderBy(l => l.FechaCaducidad) // Ordenamiento PEPS (el más próximo a caducar primero)
+                .OrderBy(l => l.FechaCaducidad ?? DateTime.MaxValue)
                 .ToList();
 
             _dgvInventario.Rows.Clear();
@@ -415,7 +482,7 @@ namespace CapaPresentaciòn.Controles
                     lote.Categoria,
                     $"{lote.CantidadActual:N2} {lote.Unidad}",
                     $"{lote.StockMinimo:N2} {lote.Unidad}",
-                    lote.FechaCaducidad.ToString("dd/MM/yyyy"),
+                    lote.FechaCaducidad.HasValue ? lote.FechaCaducidad.Value.ToString("dd/MM/yyyy") : "Sin caducidad",
                     etiquetaSemaforo
                 );
             }
