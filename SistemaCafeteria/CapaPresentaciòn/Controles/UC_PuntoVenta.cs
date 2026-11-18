@@ -27,7 +27,7 @@ namespace CapaPresentaciòn.Controles
         {
             public required Ent.Producto Producto { get; init; }
             public int Cantidad { get; set; }
-            public decimal Importe => Producto.Precio * Cantidad;
+            public decimal Importe => Ent.Redondeo.Importe(Producto.Precio * Cantidad);
         }
 
         private List<Ent.Producto> _catalogoCompleto = new();
@@ -790,9 +790,9 @@ namespace CapaPresentaciòn.Controles
                 _lblTotalValor.Location = new Point(pnlCobro.Width - _lblTotalValor.Width - 22, 34);
             }
 
-            if (TryParseMonto(_txtMontoRecibido.Text, out decimal recibido))
+            if (EntradaNumerica.TryLeerImporte(_txtMontoRecibido.Text, out decimal recibido, out _))
             {
-                decimal cambio = recibido - total;
+                decimal cambio = Ent.Redondeo.Importe(recibido - total);
                 if (cambio >= 0)
                 {
                     _lblCambioValor.Text = cambio.ToString("C2", _culturaMxn);
@@ -824,7 +824,14 @@ namespace CapaPresentaciòn.Controles
             }
 
             decimal total = _comandaActual.Sum(i => i.Importe);
-            if (!TryParseMonto(_txtMontoRecibido.Text, out decimal recibido) || recibido < total)
+            if (!EntradaNumerica.TryLeerImporte(_txtMontoRecibido.Text, out decimal recibido, out string errorMonto))
+            {
+                MessageBox.Show($"Monto recibido: {errorMonto}", "Monto inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtMontoRecibido.Focus();
+                return;
+            }
+
+            if (recibido < total)
             {
                 MessageBox.Show("El monto recibido en efectivo debe cubrir el total de la venta.", "Cobro insuficiente", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 _txtMontoRecibido.Focus();
@@ -872,13 +879,6 @@ namespace CapaPresentaciòn.Controles
                 Cursor = Cursors.Default;
                 _btnConfirmarVenta.Enabled = true;
             }
-        }
-
-        /// <summary>Acepta "300", "300.50" o "300,50".</summary>
-        private static bool TryParseMonto(string texto, out decimal valor)
-        {
-            string limpio = texto.Trim().Replace("$", "").Replace(" ", "").Replace(',', '.');
-            return decimal.TryParse(limpio, NumberStyles.Number, CultureInfo.InvariantCulture, out valor);
         }
 
         // =====================================================================

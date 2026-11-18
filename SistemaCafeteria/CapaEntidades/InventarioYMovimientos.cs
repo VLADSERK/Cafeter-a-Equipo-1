@@ -75,4 +75,29 @@ namespace CapaEntidades
         public DateTime FechaMovimiento { get; set; }
         public string? Observaciones { get; set; }
     }
+
+    /// <summary>Renglón del kardex de un lote (RF-03): movimiento con su origen y el saldo resultante.</summary>
+    public class MovimientoKardex
+    {
+        public int IdMovimiento { get; set; }
+        public DateTime FechaMovimiento { get; set; }
+        public string Tipo { get; set; } = string.Empty; // ENTREGA | CONSUMO_VENTA | MERMA | REVERSION
+        public decimal Cantidad { get; set; }             // Siempre positiva, como se guarda en MySQL
+        public string Usuario { get; set; } = string.Empty;
+        public string? Observaciones { get; set; }
+
+        // Datos del documento de origen (según el tipo)
+        public int? IdRecepcion { get; set; }
+        public string? Proveedor { get; set; }
+        public string? FolioVenta { get; set; }
+        public string? Producto { get; set; }
+        public int? IdMerma { get; set; }
+        public string? MotivoMerma { get; set; }
+
+        // Calculados en la capa de lógica
+        public bool EsEntrada { get; set; }
+        public decimal Saldo { get; set; }
+        public string TipoDescripcion { get; set; } = string.Empty;
+        public string Referencia { get; set; } = string.Empty;
+    }
 }

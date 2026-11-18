@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using CapaEntidades;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 
 namespace CapaDatos
 {
@@ -59,7 +59,7 @@ namespace CapaDatos
 
                     var producto = ObtenerProductoVendible(conn, tx, detalle.IdProducto);
 
-                    decimal subtotal = producto.Precio * detalle.Cantidad;
+                    decimal subtotal = Redondeo.Importe(producto.Precio * detalle.Cantidad);
                     total += subtotal;
 
                     const string sqlDetalle = @"
@@ -91,7 +91,7 @@ namespace CapaDatos
                     var ingredientes = ObtenerIngredientes(conn, tx, producto.IdVersionReceta);
                     foreach (var ing in ingredientes)
                     {
-                        decimal requerido = Math.Round(ing.Cantidad * ing.Factor * detalle.Cantidad, 3);
+                        decimal requerido = Redondeo.Cantidad(ing.Cantidad * ing.Factor * detalle.Cantidad);
                         if (requerido <= 0)
                             continue;
 
@@ -101,13 +101,15 @@ namespace CapaDatos
                 }
 
                 // 3. Total, cambio y folio definitivo
+                total = Redondeo.Importe(total);
                 decimal? cambio = null;
                 if (venta.MontoRecibido.HasValue)
                 {
-                    if (venta.MontoRecibido.Value < total)
+                    decimal recibido = Redondeo.Importe(venta.MontoRecibido.Value);
+                    if (recibido < total)
                         throw new InvalidOperationException(
-                            $"El monto recibido ({venta.MontoRecibido.Value:C2}) es menor al total de la venta ({total:C2}).");
-                    cambio = venta.MontoRecibido.Value - total;
+                            $"El monto recibido ({recibido:C2}) es menor al total de la venta ({total:C2}).");
+                    cambio = Redondeo.Importe(recibido - total);
                 }
 
                 string folio = $"V-{idVenta:D6}";
@@ -152,7 +154,11 @@ namespace CapaDatos
         public List<Venta> ObtenerVentas(DateTime desde, DateTime hasta, string? estado = null)
         {
             var lista = new List<Venta>();
-            const string sql = @"
+            bool filtrarEstado = !string.IsNullOrWhiteSpace(estado);
+
+            // El filtro de estado se agrega solo si se pide. El patrón "(@estado IS NULL OR v.estado = @estado)"
+            // con un parámetro nulo provocaba "Illegal mix of collations" en conexiones reutilizadas del pool.
+            string sql = $@"
                 SELECT v.id_venta, v.id_usuario, v.folio, v.fecha_venta, v.total, v.estado,
                        v.metodo_pago, v.monto_recibido, v.cambio, v.motivo_cancelacion,
                        u.nombre AS nombre_cajero
@@ -160,14 +166,15 @@ namespace CapaDatos
                 INNER JOIN Usuario u ON u.id_usuario = v.id_usuario
                 WHERE v.fecha_venta >= @desde
                   AND v.fecha_venta < @hasta
-                  AND (@estado IS NULL OR v.estado = @estado)
+                  {(filtrarEstado ? "AND v.estado = @estado" : "")}
                 ORDER BY v.fecha_venta DESC;";
 
             using var conn = ConexionMySql.ObtenerConexion();
             using var cmd = new MySqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@desde", desde.Date);
             cmd.Parameters.AddWithValue("@hasta", hasta.Date.AddDays(1));
-            cmd.Parameters.AddWithValue("@estado", string.IsNullOrWhiteSpace(estado) ? DBNull.Value : (object)estado);
+            if (filtrarEstado)
+                cmd.Parameters.AddWithValue("@estado", estado!.Trim());
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -484,12 +491,12 @@ namespace CapaDatos
             decimal requerido, int idDetalleVenta, int idUsuario, DateTime fecha, string nombreProducto)
         {
             var lotes = new List<(int IdLote, decimal Disponible, decimal Costo)>();
-            const string sqlLotes = @"
+            string sqlLotes = $@"
                 SELECT id_lote, cantidad_disponible, costo_unitario
                 FROM Lote
                 WHERE id_insumo = @id_insumo
                   AND cantidad_disponible > 0
-                ORDER BY fecha_caducidad IS NULL, fecha_caducidad, fecha_recepcion, id_lote
+                ORDER BY {CriterioPeps.Orden()}
                 FOR UPDATE;";
 
             using (var cmd = new MySqlCommand(sqlLotes, conn, tx))

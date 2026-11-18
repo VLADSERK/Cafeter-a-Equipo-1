@@ -59,7 +59,9 @@ namespace CapaLogica
                     ? conStock.Sum(l => l.CantidadDisponible * l.CostoUnitario) / totalDisponible
                     : grupo.OrderByDescending(l => l.FechaRecepcion).First().CostoUnitario;
 
-                resultado[grupo.Key] = Math.Round(costo, 4);
+                // Costo de referencia intermedio: 4 decimales para no perder precisión antes
+                // de multiplicarlo por la cantidad de la receta (el importe final se redondea a 2).
+                resultado[grupo.Key] = Redondeo.A(costo, 4);
             }
 
             return resultado;
@@ -117,6 +119,9 @@ namespace CapaLogica
 
             if (producto.Precio <= 0)
                 return (false, "El precio debe ser mayor a cero.", 0);
+
+            if (Redondeo.ExcedeDecimales(producto.Precio, Redondeo.DecimalesImporte))
+                return (false, "El precio admite como máximo 2 decimales (centavos).", 0);
 
             try
             {
@@ -186,6 +191,9 @@ namespace CapaLogica
             if (ingredientes.Any(i => i.Cantidad <= 0))
                 return (false, "Todas las cantidades de la receta deben ser mayores a cero.", 0);
 
+            if (ingredientes.Any(i => Redondeo.ExcedeDecimales(i.Cantidad, Redondeo.DecimalesCantidad)))
+                return (false, "Las cantidades de la receta admiten como máximo 3 decimales.", 0);
+
             var repetido = ingredientes.GroupBy(i => i.IdInsumo).FirstOrDefault(g => g.Count() > 1);
             if (repetido != null)
                 return (false, "Hay un insumo repetido en la receta. Junta las cantidades en una sola línea.", 0);
@@ -226,14 +234,6 @@ namespace CapaLogica
         // =====================================================================
 
         private static (bool Exito, string Mensaje) ValidarAdministrador()
-        {
-            if (!SesionActual.HaySesionActiva)
-                return (false, "No hay una sesión activa.");
-
-            if (SesionActual.Rol != "Administrador")
-                return (false, "Solo el Administrador puede modificar productos y recetas.");
-
-            return (true, string.Empty);
-        }
+            => Permisos.Verificar(Operacion.AdministrarCatalogo);
     }
 }

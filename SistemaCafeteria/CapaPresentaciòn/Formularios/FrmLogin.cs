@@ -245,15 +245,28 @@ namespace CapaPresentaciòn.Formularios
                 _txtUsuario.TieneError = false;
                 _txtContrasena.TieneError = false;
 
+                // RIU-09: cada rol entra solo a su ventana. Un rol desconocido no entra a ninguna.
+                string rol = resultado.Usuario.NombreRol;
+                bool esAdmin = rol.Equals(Permisos.RolAdministrador, StringComparison.OrdinalIgnoreCase);
+                if (!esAdmin && !Permisos.EsOperativo(rol))
+                {
+                    SesionActual.Cerrar();
+                    MessageBox.Show($"El rol \"{rol}\" no tiene módulos asignados. Contacta al Administrador.",
+                        "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _txtContrasena.Texto = string.Empty;
+                    return;
+                }
+
                 Hide();
 
-                if (resultado.Usuario.NombreRol.Equals("Administrador", StringComparison.OrdinalIgnoreCase))
+                if (esAdmin)
                 {
                     using FrmPrincipalAdmin ventanaAdmin = new FrmPrincipalAdmin();
                     ventanaAdmin.ShowDialog();
                 }
                 else
                 {
+                    // Cajero y Barista: punto de venta, recepción, inventario y mermas
                     using FrmPrincipalOperativo ventanaCajero = new FrmPrincipalOperativo();
                     ventanaCajero.ShowDialog();
                 }

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using CapaEntidades;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 
 namespace CapaDatos
 {
@@ -54,7 +54,7 @@ namespace CapaDatos
                     Estado = reader.GetString("estado"),
                     NombreInsumo = reader.GetString("nombre_insumo"),
                     UnidadAbreviatura = reader.GetString("unidad_abrev"),
-                    CodigoLote = reader.IsDBNull(ordCodigoLote) ? "Varios (PEPS)" : reader.GetString(ordCodigoLote),
+                    CodigoLote = reader.IsDBNull(ordCodigoLote) ? "No identificado (PEPS)" : reader.GetString(ordCodigoLote),
                     NombreUsuarioRegistra = reader.GetString("nombre_usuario_registra")
                 });
             }
@@ -139,20 +139,19 @@ namespace CapaDatos
                 // 3. RECHAZAR: solo se cambia el estado (y se anota el motivo en la descripción)
                 if (!aprobar)
                 {
-                    const string sqlRechazar = @"
+                    // Sin parámetros de texto nulos en expresiones (evita "Illegal mix of collations")
+                    string sqlRechazar = $@"
                         UPDATE Merma
                         SET estado = 'Rechazada',
-                            id_usuario_autoriza = @id_admin,
-                            descripcion = CASE
-                                WHEN @obs IS NULL THEN descripcion
-                                ELSE LEFT(CONCAT_WS(' | ', descripcion, CONCAT('Rechazo: ', @obs)), 255)
-                            END
+                            id_usuario_autoriza = @id_admin
+                            {(hayObservaciones ? ", descripcion = LEFT(CONCAT_WS(' | ', descripcion, CONCAT('Rechazo: ', @obs)), 255)" : "")}
                         WHERE id_merma = @id_merma;";
 
                     using (var cmdRechazar = new MySqlCommand(sqlRechazar, conn, tx))
                     {
                         cmdRechazar.Parameters.AddWithValue("@id_admin", idAdmin);
-                        cmdRechazar.Parameters.AddWithValue("@obs", hayObservaciones ? (object)observaciones!.Trim() : DBNull.Value);
+                        if (hayObservaciones)
+                            cmdRechazar.Parameters.AddWithValue("@obs", observaciones!.Trim());
                         cmdRechazar.Parameters.AddWithValue("@id_merma", idMerma);
                         cmdRechazar.ExecuteNonQuery();
                     }
@@ -161,91 +160,20 @@ namespace CapaDatos
                     return (true, "Merma rechazada. El inventario no se modificó.");
                 }
 
-                // 4. APROBAR: bloquear los lotes de los que se va a descontar
-                var lotes = new List<(int IdLote, decimal Disponible)>();
-
-                string sqlLotes = idLote.HasValue
-                    ? @"SELECT id_lote, cantidad_disponible
-                        FROM Lote
-                        WHERE id_lote = @id_lote
-                        FOR UPDATE;"
-                    : @"SELECT id_lote, cantidad_disponible
-                        FROM Lote
-                        WHERE id_insumo = @id_insumo
-                          AND cantidad_disponible > 0
-                        ORDER BY fecha_caducidad IS NULL, fecha_caducidad, fecha_recepcion, id_lote
-                        FOR UPDATE;";
-
-                using (var cmdLotes = new MySqlCommand(sqlLotes, conn, tx))
-                {
-                    if (idLote.HasValue)
-                        cmdLotes.Parameters.AddWithValue("@id_lote", idLote.Value);
-                    else
-                        cmdLotes.Parameters.AddWithValue("@id_insumo", idInsumo);
-
-                    using var reader = cmdLotes.ExecuteReader();
-                    while (reader.Read())
-                        lotes.Add((reader.GetInt32("id_lote"), reader.GetDecimal("cantidad_disponible")));
-                }
-
-                decimal totalDisponible = 0;
-                foreach (var l in lotes)
-                    totalDisponible += l.Disponible;
-
-                if (totalDisponible < cantidad)
-                {
-                    tx.Rollback();
-                    return (false, $"Stock insuficiente para autorizar la merma. Disponible actual: {totalDisponible:N2}, requerido: {cantidad:N2}.");
-                }
-
-                // 5. Descontar de cada lote y registrar el movimiento MERMA en el kardex
-                const string sqlDescontar = @"
-                    UPDATE Lote
-                    SET cantidad_disponible = cantidad_disponible - @cantidad
-                    WHERE id_lote = @id_lote;";
-
-                const string sqlMov = @"
-                    INSERT INTO MovimientoInventario (
-                        id_lote, id_usuario, id_merma, tipo, cantidad, fecha_movimiento, observaciones
-                    ) VALUES (
-                        @id_lote, @id_usuario, @id_merma, 'MERMA', @cantidad, @fecha_movimiento, @observaciones
-                    );";
-
+                // 4. APROBAR: descontar del lote indicado o, si la merma no trae lote, en orden PEPS,
+                //    con el movimiento MERMA de cada lote en el kardex (misma rutina que el registro inmediato)
                 string textoMov = hayObservaciones
                     ? $"Merma autorizada por administrador ({motivo}): {observaciones!.Trim()}"
                     : $"Merma autorizada por administrador ({motivo})";
-                if (textoMov.Length > 255)
-                    textoMov = textoMov.Substring(0, 255);
 
-                DateTime ahora = DateTime.Now;
-                decimal restante = cantidad;
-
-                foreach (var lote in lotes)
+                try
                 {
-                    if (restante <= 0) break;
-
-                    decimal aDescontar = Math.Min(restante, lote.Disponible);
-                    if (aDescontar <= 0) continue;
-
-                    using (var cmdLote = new MySqlCommand(sqlDescontar, conn, tx))
-                    {
-                        cmdLote.Parameters.AddWithValue("@cantidad", aDescontar);
-                        cmdLote.Parameters.AddWithValue("@id_lote", lote.IdLote);
-                        cmdLote.ExecuteNonQuery();
-                    }
-
-                    using (var cmdMov = new MySqlCommand(sqlMov, conn, tx))
-                    {
-                        cmdMov.Parameters.AddWithValue("@id_lote", lote.IdLote);
-                        cmdMov.Parameters.AddWithValue("@id_usuario", idAdmin);
-                        cmdMov.Parameters.AddWithValue("@id_merma", idMerma);
-                        cmdMov.Parameters.AddWithValue("@cantidad", aDescontar);
-                        cmdMov.Parameters.AddWithValue("@fecha_movimiento", ahora);
-                        cmdMov.Parameters.AddWithValue("@observaciones", textoMov);
-                        cmdMov.ExecuteNonQuery();
-                    }
-
-                    restante -= aDescontar;
+                    DescuentoMerma.Aplicar(conn, tx, idMerma, idInsumo, idLote, cantidad, idAdmin, textoMov, DateTime.Now);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    tx.Rollback();
+                    return (false, $"No se pudo autorizar la merma. {ex.Message}");
                 }
 
                 // 6. Marcar la merma como autorizada

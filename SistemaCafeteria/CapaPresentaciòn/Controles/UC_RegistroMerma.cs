@@ -8,6 +8,7 @@ using CapaEntidades;
 using CapaLogica;
 using CapaPresentacion.Estilos;
 using CapaPresentaciòn.Estilos;
+using CapaPresentaciòn.Formularios;
 
 namespace CapaPresentaciòn.Controles
 {
@@ -18,7 +19,8 @@ namespace CapaPresentaciòn.Controles
 
         private List<ResumenInsumoInventario> _resumenInventario = new();
         private List<Lote> _lotesDelInsumoActual = new();
-        private Lote? _loteSeleccionado;
+        private Lote? _loteSeleccionado;          // null = lote no identificado → descuento PEPS (RIU-05)
+        private Insumo? _insumoSeleccionado;
         private ConfiguracionGeneral _configActual = new();
         private int _mermasRegistradasTurno = 0;
         private readonly string _responsableTurno;
@@ -48,6 +50,7 @@ namespace CapaPresentaciòn.Controles
 
         // Tarjeta derecha: Impacto PEPS y autorización
         private PanelRedondeado _cardImpacto = null!;
+        private Label _lblStockActualTit = null!;
         private Label _lblStockActualVal = null!;
         private Label _lblDescuentoVal = null!;
         private Label _lblCostoMermaVal = null!;
@@ -69,8 +72,14 @@ namespace CapaPresentaciòn.Controles
 
             InitializeComponent();
             ConfigurarInterfazMerma();
-            CargarDatosDesdeMysql();
             ActualizarImpactoInventario();
+
+            // Existencias frescas de MySQL al abrir y al volver a la pantalla (misma fuente que los inventarios)
+            RecargaAutomatica.AlMostrar(this, () =>
+            {
+                CargarDatosDesdeMysql();
+                LimpiarFormulario();
+            });
         }
 
         private void ConfigurarInterfazMerma()
@@ -136,7 +145,7 @@ namespace CapaPresentaciòn.Controles
 
             _lblDescripcion = new Label
             {
-                Text = "Selecciona el insumo y el lote PEPS afectado para descontar existencias y mantener trazabilidad.",
+                Text = "Selecciona el insumo y, si lo conoces, el lote afectado; si no, se descontará en orden PEPS (recepción más antigua primero).",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(0, 32),
@@ -249,7 +258,7 @@ namespace CapaPresentaciòn.Controles
 
             Label lblCardSub = new Label
             {
-                Text = "Todos los campos con * son obligatorios para auditoría.",
+                Text = "Los campos con * son obligatorios para auditoría.",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(72, 40),
@@ -267,7 +276,7 @@ namespace CapaPresentaciòn.Controles
             };
             _cmbInsumo.SelectedIndexChanged += CmbInsumo_SelectedIndexChanged;
 
-            Label lblLote = CrearEtiquetaCampo("Lote PEPS *", 320, 78);
+            Label lblLote = CrearEtiquetaCampo("Lote afectado (si se conoce)", 320, 78);
             _cmbLote = new ComboBox
             {
                 Font = new Font("Segoe UI", 10.5F),
@@ -318,20 +327,13 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(320, 182),
                 Height = 36
             };
-            _cmbMotivo.Items.AddRange(new object[]
-            {
-                "Seleccionar motivo...",
-                "Caducidad vencida",
-                "Derrame o accidente en barra",
-                "Producto dañado en almacén",
-                "Error de preparación en receta",
-                "Mal estado / Calidad no óptima"
-            });
+            _cmbMotivo.Items.Add("Seleccionar motivo...");
+            _cmbMotivo.Items.AddRange(MermaNegocio.Motivos);
             _cmbMotivo.SelectedIndex = 0;
             _cmbMotivo.SelectedIndexChanged += (s, e) => ActualizarImpactoInventario();
 
             // Fila 3: Observaciones / Justificación *
-            Label lblObs = CrearEtiquetaCampo("Observaciones / Justificación *", 26, 244);
+            Label lblObs = CrearEtiquetaCampo("Descripción de la incidencia (obligatoria con el motivo \"Otros\")", 26, 244);
             _txtObservaciones = new TextBox
             {
                 Name = "txtObservaciones",
@@ -406,7 +408,7 @@ namespace CapaPresentaciòn.Controles
                 e.Graphics.DrawRectangle(pen, 0, 0, pnlResumen.Width - 1, pnlResumen.Height - 1);
             };
 
-            Label l1 = new Label { Text = "Existencia actual en lote:", Font = new Font("Segoe UI", 9F), ForeColor = TemaCafeteria.TextoSecundario, Location = new Point(14, 14), AutoSize = true };
+            Label l1 = _lblStockActualTit = new Label { Text = "Existencia actual en lote:", Font = new Font("Segoe UI", 9F), ForeColor = TemaCafeteria.TextoSecundario, Location = new Point(14, 14), AutoSize = true };
             _lblStockActualVal = new Label { Name = "lblStockActualVal", Text = "—", Font = new Font("Segoe UI", 9.5F, FontStyle.Bold), ForeColor = TemaCafeteria.TextoOscuro, AutoSize = true };
 
             Label l2 = new Label { Text = "Cantidad a descontar:", Font = new Font("Segoe UI", 9F), ForeColor = TemaCafeteria.TextoSecundario, Location = new Point(14, 44), AutoSize = true };
@@ -538,6 +540,7 @@ namespace CapaPresentaciòn.Controles
             _cmbLote.Items.Clear();
             _lotesDelInsumoActual.Clear();
             _loteSeleccionado = null;
+            _insumoSeleccionado = null;
 
             if (_cmbInsumo.SelectedItem is not Insumo insumoSel || insumoSel.IdInsumo <= 0)
             {
@@ -549,6 +552,7 @@ namespace CapaPresentaciòn.Controles
                 return;
             }
 
+            _insumoSeleccionado = insumoSel;
             _lblUnidadSufijo.Text = insumoSel.UnidadAbreviatura;
 
             var resumenInsumo = _resumenInventario.FirstOrDefault(r => r.Insumo.IdInsumo == insumoSel.IdInsumo);
@@ -568,112 +572,109 @@ namespace CapaPresentaciòn.Controles
             else
             {
                 _cmbLote.Enabled = true;
+                // RIU-05: el lote se elige "cuando se conozca"; por omisión se descuenta por PEPS
+                _cmbLote.Items.Add("No identificado · descontar por PEPS");
                 foreach (var lote in _lotesDelInsumoActual)
                 {
                     string cadTexto = lote.FechaCaducidad.HasValue ? lote.FechaCaducidad.Value.ToString("dd/MM/yy") : "S/C";
-                    _cmbLote.Items.Add($"{lote.CodigoLote} ({lote.CantidadDisponible:N2} {lote.UnidadAbreviatura} - Cad: {cadTexto})");
+                    _cmbLote.Items.Add($"{lote.CodigoLote} ({FormatoInventario.Cantidad(lote.CantidadDisponible, lote.UnidadAbreviatura)} - Cad: {cadTexto})");
                 }
                 _cmbLote.SelectedIndex = 0;
             }
+
+            ActualizarImpactoInventario();
         }
 
         private void CmbLote_SelectedIndexChanged(object? sender, EventArgs e)
         {
-            if (!_cmbLote.Enabled || _cmbLote.SelectedIndex < 0 || _cmbLote.SelectedIndex >= _lotesDelInsumoActual.Count)
-            {
-                _loteSeleccionado = null;
-                ActualizarImpactoInventario();
-                return;
-            }
+            int indiceLote = _cmbLote.SelectedIndex - 1;   // 0 = "No identificado (PEPS)"
+            _loteSeleccionado = _cmbLote.Enabled && indiceLote >= 0 && indiceLote < _lotesDelInsumoActual.Count
+                ? _lotesDelInsumoActual[indiceLote]
+                : null;
 
-            _loteSeleccionado = _lotesDelInsumoActual[_cmbLote.SelectedIndex];
-            _lblUnidadSufijo.Text = _loteSeleccionado.UnidadAbreviatura;
             ActualizarImpactoInventario();
         }
 
         private void ActualizarImpactoInventario()
         {
-            if (_loteSeleccionado == null)
+            _lblStockActualTit.Text = _loteSeleccionado != null ? "Existencia actual en lote:" : "Existencia del insumo (PEPS):";
+
+            if (_insumoSeleccionado == null || _lotesDelInsumoActual.Count == 0)
             {
-                _lblStockActualVal.Text = "—";
+                _lblStockActualVal.Text = _insumoSeleccionado == null ? "—" : $"0 {_insumoSeleccionado.UnidadAbreviatura}";
                 _lblDescuentoVal.Text = "0.00";
                 _lblCostoMermaVal.Text = "$ 0.00";
                 _lblStockFinalVal.Text = "—";
+                _lblStockFinalVal.ForeColor = TemaCafeteria.CafePrimario;
                 _lblSemaforoResultante.Text = "● Sin cambios";
                 _lblSemaforoResultante.ForeColor = TemaCafeteria.TextoSecundario;
                 _pnlAlertaAutorizacion.BackColor = ColorTranslator.FromHtml("#EDF4F0");
                 _lblTextoAutorizacion.ForeColor = ColorTranslator.FromHtml("#264D3B");
-                _lblTextoAutorizacion.Text = $"ℹ  Selecciona un lote y captura la cantidad. Límite sin autorización: ${_configActual.LimiteEconomicoMerma:N2} MXN.";
+                _lblTextoAutorizacion.Text = _insumoSeleccionado == null
+                    ? $"ℹ  Selecciona el insumo y captura la cantidad. Límite sin autorización: ${_configActual.LimiteEconomicoMerma:N2} MXN."
+                    : "ℹ  Este insumo no tiene existencias, no hay nada que registrar como merma.";
                 PosicionarValoresResumen();
                 return;
             }
 
-            string u = _loteSeleccionado.UnidadAbreviatura;
-            _lblStockActualVal.Text = $"{_loteSeleccionado.CantidadDisponible:N2} {u}";
+            string u = _insumoSeleccionado.UnidadAbreviatura;
+            decimal merma = EntradaNumerica.LeerCantidadOCero(_txtCantidadMerma.Text);
 
-            decimal.TryParse(_txtCantidadMerma.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal merma);
-            if (merma < 0) merma = 0;
+            // Mismo cálculo que MermaNegocio: lote elegido o reparto PEPS, Half-Up a 2 decimales (RNF-08)
+            var estimacion = MermaNegocio.Estimar(_lotesDelInsumoActual, _loteSeleccionado, merma);
+            decimal costoEstimado = estimacion.CostoEstimado;
 
-            decimal costoEstimado = Math.Round(merma * _loteSeleccionado.CostoUnitario, 2);
-            _lblDescuentoVal.Text = $"- {merma:N2} {u}";
+            _lblStockActualVal.Text = FormatoInventario.Cantidad(estimacion.Disponible, u);
+            _lblDescuentoVal.Text = $"- {FormatoInventario.Cantidad(merma, u)}";
             _lblCostoMermaVal.Text = $"$ {costoEstimado:N2}";
 
-            decimal resultanteLote = _loteSeleccionado.CantidadDisponible - merma;
+            string destino = _loteSeleccionado != null
+                ? $"del lote {_loteSeleccionado.CodigoLote}"
+                : estimacion.Asignacion.Count == 0
+                    ? "por PEPS"
+                    : "por PEPS: " + string.Join(", ", estimacion.Asignacion.Select(a => $"{a.Lote.CodigoLote} ({FormatoInventario.Numero(a.Cantidad)})"));
 
-            if (merma > _loteSeleccionado.CantidadDisponible)
+            if (!estimacion.Alcanza)
             {
-                _lblStockFinalVal.Text = "Excede lote";
+                _lblStockFinalVal.Text = _loteSeleccionado != null ? "Excede lote" : "Excede existencia";
                 _lblStockFinalVal.ForeColor = ColorTranslator.FromHtml("#C62828");
                 _pnlAlertaAutorizacion.BackColor = ColorTranslator.FromHtml("#FFEBEE");
                 _lblTextoAutorizacion.ForeColor = ColorTranslator.FromHtml("#C62828");
-                _lblTextoAutorizacion.Text = "⚠  La cantidad mermada no puede ser mayor a la existencia disponible en el lote seleccionado.";
+                _lblTextoAutorizacion.Text = _loteSeleccionado != null
+                    ? "⚠  La cantidad mermada no puede ser mayor a la existencia disponible en el lote seleccionado."
+                    : "⚠  La cantidad mermada no puede ser mayor a la existencia total del insumo.";
             }
             else
             {
-                _lblStockFinalVal.Text = $"{resultanteLote:N2} {u}";
+                _lblStockFinalVal.Text = FormatoInventario.Cantidad(estimacion.Disponible - merma, u);
                 _lblStockFinalVal.ForeColor = TemaCafeteria.CafePrimario;
 
                 // Calcular nuevo semáforo global del insumo usando la configuración de MySQL
-                var resumenIns = _resumenInventario.FirstOrDefault(r => r.Insumo.IdInsumo == _loteSeleccionado.IdInsumo);
-                decimal stockGlobalActual = resumenIns?.Insumo.StockActualTotal ?? _loteSeleccionado.CantidadDisponible;
-                decimal stockMaximo = resumenIns?.Insumo.StockMaximo ?? _loteSeleccionado.StockMaximoInsumo;
+                var resumenIns = _resumenInventario.FirstOrDefault(r => r.Insumo.IdInsumo == _insumoSeleccionado.IdInsumo);
+                decimal stockGlobalActual = resumenIns?.Insumo.StockActualTotal ?? estimacion.Disponible;
+                decimal stockMaximo = resumenIns?.Insumo.StockMaximo ?? _insumoSeleccionado.StockMaximo;
                 decimal stockGlobalResultante = Math.Max(0, stockGlobalActual - merma);
 
-                var semaforoNuevo = _invNegocio.CalcularSemaforo(stockGlobalResultante, stockMaximo, _configActual);
-                switch (semaforoNuevo)
-                {
-                    case NivelSemaforo.Verde:
-                        _lblSemaforoResultante.Text = "●  Estado Óptimo";
-                        _lblSemaforoResultante.ForeColor = ColorTranslator.FromHtml("#1F4E35");
-                        break;
-                    case NivelSemaforo.Amarillo:
-                        _lblSemaforoResultante.Text = "▲  Alerta Preventiva";
-                        _lblSemaforoResultante.ForeColor = ColorTranslator.FromHtml("#B26A00");
-                        break;
-                    case NivelSemaforo.Rojo:
-                        _lblSemaforoResultante.Text = "■  Nivel Crítico";
-                        _lblSemaforoResultante.ForeColor = ColorTranslator.FromHtml("#C62828");
-                        break;
-                    default:
-                        _lblSemaforoResultante.Text = "○  Insumo Agotado";
-                        _lblSemaforoResultante.ForeColor = TemaCafeteria.TextoSecundario;
-                        break;
-                }
+                // Mismo semáforo que el inventario (RF-08): estado textual, porcentaje y aviso de reabastecimiento
+                var semaforoNuevo = SemaforoExistencias.Evaluar(stockGlobalResultante, stockMaximo, _configActual);
+                string aviso = semaforoNuevo.AvisoReabastecimiento is string a ? $"  ·  {a}" : "";
+                _lblSemaforoResultante.Text = $"●  {semaforoNuevo.Etiqueta} ({semaforoNuevo.Porcentaje:0.0} %){aviso}";
+                _lblSemaforoResultante.ForeColor = SemaforoVisual.Acento(semaforoNuevo.Nivel);
 
-                // Evaluar regla económica configurada en ConfiguracionGeneral
-                if (costoEstimado > _configActual.LimiteEconomicoMerma)
+                // Evaluar regla económica configurada en ConfiguracionGeneral (RF-09)
+                if (MermaNegocio.RequiereAutorizacion(costoEstimado, _configActual))
                 {
                     _pnlAlertaAutorizacion.BackColor = ColorTranslator.FromHtml("#FFF4E5");
                     _lblTextoAutorizacion.ForeColor = ColorTranslator.FromHtml("#B26A00");
-                    _lblTextoAutorizacion.Text = $"⚠  Costo (${costoEstimado:N2}) supera el límite de ${_configActual.LimiteEconomicoMerma:N2}. Quedará PENDIENTE de autorización con NIP del Administrador.";
-                    _btnRegistrarMerma.Text = "✓  Enviar merma a autorización";
+                    _lblTextoAutorizacion.Text = $"🔒  Costo (${costoEstimado:N2}) supera el límite de ${_configActual.LimiteEconomicoMerma:N2}. Se pedirá de inmediato el NIP del Administrador; si no se autoriza, quedará PENDIENTE sin descontar. Descuento {destino}.";
+                    _btnRegistrarMerma.Text = "🔒  Registrar y solicitar autorización";
                 }
                 else
                 {
                     _pnlAlertaAutorizacion.BackColor = ColorTranslator.FromHtml("#EDF4F0");
                     _lblTextoAutorizacion.ForeColor = ColorTranslator.FromHtml("#264D3B");
-                    _lblTextoAutorizacion.Text = $"✓  Dentro del límite permitido (${_configActual.LimiteEconomicoMerma:N2}). Se autorizará y descontará de inmediato del lote PEPS.";
-                    _btnRegistrarMerma.Text = "✓  Registrar merma y descontar lote";
+                    _lblTextoAutorizacion.Text = $"✓  Dentro del límite (${_configActual.LimiteEconomicoMerma:N2}). Se autorizará y descontará de inmediato {destino}.";
+                    _btnRegistrarMerma.Text = "✓  Registrar merma y descontar";
                 }
             }
 
@@ -703,15 +704,24 @@ namespace CapaPresentaciòn.Controles
 
         private void BtnRegistrarMerma_Click(object? sender, EventArgs e)
         {
-            if (_loteSeleccionado == null)
+            if (_insumoSeleccionado == null)
             {
-                MessageBox.Show("Selecciona un insumo y un lote PEPS válido.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Selecciona el insumo afectado.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _cmbInsumo.Focus();
                 return;
             }
 
-            if (!decimal.TryParse(_txtCantidadMerma.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cantMerma) || cantMerma <= 0)
+            if (_lotesDelInsumoActual.Count == 0)
             {
-                MessageBox.Show("Ingresa una cantidad mermada mayor a cero.", "Validación de cantidad", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Este insumo no tiene existencias; no hay nada que registrar como merma.", "Sin existencias", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!EntradaNumerica.TryLeerCantidad(_txtCantidadMerma.Text, out decimal cantMerma, out string errorCantidad) || cantMerma <= 0)
+            {
+                string mensaje = errorCantidad.Length > 0 ? $"Cantidad mermada: {errorCantidad}" : "Ingresa una cantidad mermada mayor a cero.";
+                MessageBox.Show(mensaje, "Validación de cantidad", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtCantidadMerma.Focus();
                 return;
             }
 
@@ -722,7 +732,43 @@ namespace CapaPresentaciòn.Controles
             }
 
             string motivo = _cmbMotivo.SelectedItem?.ToString() ?? "";
-            var resultado = _mermaNegocio.RegistrarMerma(_loteSeleccionado, cantMerma, motivo, _txtObservaciones.Text);
+
+            // Validaciones previas para no pedir el NIP de una merma que de todos modos se rechazaría
+            var estimacion = MermaNegocio.Estimar(_lotesDelInsumoActual, _loteSeleccionado, cantMerma);
+            if (!estimacion.Alcanza)
+            {
+                MessageBox.Show(_loteSeleccionado != null
+                        ? "La cantidad mermada no puede superar la existencia disponible del lote."
+                        : "La cantidad mermada no puede superar la existencia total del insumo.",
+                    "Validación de cantidad", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtCantidadMerma.Focus();
+                return;
+            }
+
+            if (motivo == MermaNegocio.MotivoOtros && string.IsNullOrWhiteSpace(_txtObservaciones.Text))
+            {
+                MessageBox.Show("Con el motivo \"Otros\" es obligatorio describir qué ocurrió con el insumo.", "Descripción obligatoria", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtObservaciones.Focus();
+                return;
+            }
+
+            // RF-09 / RIU-05: si el costo supera el límite, se pide de inmediato el NIP del Administrador
+            string? nipAdministrador = null;
+            decimal costoEstimado = estimacion.CostoEstimado;
+            if (MermaNegocio.RequiereAutorizacion(costoEstimado, _configActual))
+            {
+                string loteTexto = _loteSeleccionado != null ? $"lote {_loteSeleccionado.CodigoLote}" : "lote no identificado (PEPS)";
+                nipAdministrador = DialogoNipAdministrador.Solicitar(
+                    FindForm() ?? (IWin32Window)this,
+                    "Merma sobre el límite",
+                    $"{_insumoSeleccionado.Nombre} · {loteTexto}\n" +
+                    $"Cantidad: {FormatoInventario.Cantidad(cantMerma, _insumoSeleccionado.UnidadAbreviatura)} · Costo estimado: ${costoEstimado:N2} " +
+                    $"(límite ${_configActual.LimiteEconomicoMerma:N2}).\n\n" +
+                    "Si no se autoriza ahora, la merma quedará PENDIENTE y el inventario no se descontará.",
+                    "No autorizar ahora");
+            }
+
+            var resultado = _mermaNegocio.RegistrarMerma(_insumoSeleccionado.IdInsumo, _loteSeleccionado, cantMerma, motivo, _txtObservaciones.Text, nipAdministrador);
 
             if (!resultado.Exito)
             {
@@ -732,7 +778,7 @@ namespace CapaPresentaciòn.Controles
 
             MessageBox.Show(
                 resultado.Mensaje,
-                resultado.EstadoFinal == "Autorizada" ? "Merma Autorizada y Descontada" : "Merma Enviada a Revisión",
+                resultado.EstadoFinal == "Autorizada" ? "Merma autorizada y descontada" : "Merma pendiente de autorización",
                 MessageBoxButtons.OK,
                 resultado.EstadoFinal == "Autorizada" ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
 
@@ -774,7 +820,7 @@ namespace CapaPresentaciòn.Controles
 
             foreach (Control c in _cardFormulario.Controls)
             {
-                if (c is Label lbl && (lbl.Text.StartsWith("Lote PEPS") || lbl.Text.StartsWith("Motivo de merma")))
+                if (c is Label lbl && (lbl.Text.StartsWith("Lote afectado") || lbl.Text.StartsWith("Motivo de merma")))
                 {
                     lbl.Left = xCol2;
                 }

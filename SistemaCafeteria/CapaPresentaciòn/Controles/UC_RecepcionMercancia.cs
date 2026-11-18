@@ -42,8 +42,14 @@ namespace CapaPresentaciòn.Controles
         private DateTimePicker _dtpRecepcion = null!;
         private DateTimePicker _dtpCaducidad = null!;
 
+        private CheckBox _chkSinCaducidad = null!;
+
         private PanelRedondeado _cardLote = null!;
+        private TextBox _txtCodigoBarras = null!;
         private Label _lblCodigoLote = null!;
+
+        /// <summary>Se dispara tras registrar una recepción (la ventana del Administrador recarga su inventario).</summary>
+        public event EventHandler? RecepcionRegistrada;
         private PictureBox _picCodigoBarras = null!;
 
         private PanelRedondeado _barraAcciones = null!;
@@ -55,6 +61,13 @@ namespace CapaPresentaciòn.Controles
             InitializeComponent();
             ConfigurarInterfazRecepcion();
             InicializarLogicaMysql();
+        }
+
+        /// <summary>Texto de la ruta superior (la ventana del Administrador la cambia a su contexto).</summary>
+        public string Ruta
+        {
+            get => _lblRuta.Text;
+            set => _lblRuta.Text = value;
         }
 
         private void ConfigurarInterfazRecepcion()
@@ -344,7 +357,7 @@ namespace CapaPresentaciòn.Controles
                 Height = 36
             };
 
-            Label lblFechaCad = CrearEtiquetaCampo("Fecha de caducidad *", 320, 326);
+            Label lblFechaCad = CrearEtiquetaCampo("Fecha de caducidad", 320, 326);
             _dtpCaducidad = new DateTimePicker
             {
                 Name = "dtpCaducidad",
@@ -354,6 +367,22 @@ namespace CapaPresentaciòn.Controles
                 Location = new Point(320, 350),
                 Height = 36
             };
+
+            // RF-01: la caducidad se captura "cuando corresponda" (vasos, popotes, etc. no caducan)
+            _chkSinCaducidad = new CheckBox
+            {
+                Text = "No aplica",
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = TemaCafeteria.TextoSecundario,
+                AutoSize = true,
+                Location = new Point(520, 325),
+                Cursor = Cursors.Hand
+            };
+            _chkSinCaducidad.CheckedChanged += (s, e) => _dtpCaducidad.Enabled = !_chkSinCaducidad.Checked;
+
+            // La fecha de recepción no puede ser futura (la lógica también lo valida)
+            _dtpRecepcion.MaxDate = DateTime.Today.AddDays(1).AddTicks(-1);
+            _dtpRecepcion.MinDate = DateTime.Today.AddDays(-InventarioNegocio.DiasMaximosRecepcionAtrasada);
 
             _cardFormulario.Controls.AddRange(new Control[]
             {
@@ -365,7 +394,7 @@ namespace CapaPresentaciòn.Controles
                 lblCostoUnit, pnlCostoUnit,
                 lblCostoEst, pnlCostoEst,
                 lblFechaRec, _dtpRecepcion,
-                lblFechaCad, _dtpCaducidad
+                lblFechaCad, _dtpCaducidad, _chkSinCaducidad
             });
         }
 
@@ -448,22 +477,44 @@ namespace CapaPresentaciòn.Controles
 
             pnlBarcodeBox.Controls.AddRange(new Control[] { lblIdTitulo, _lblCodigoLote, _picCodigoBarras });
 
+            // Código de barras del empaque (opcional): si se deja vacío, se genera uno único al confirmar (RF-01)
+            Label lblBarrasTit = new Label
+            {
+                Name = "lblBarrasTit",
+                Text = "Código de barras del empaque (opcional)",
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
+                ForeColor = TemaCafeteria.TextoOscuro,
+                Location = new Point(22, 240),
+                AutoSize = true
+            };
+
+            _txtCodigoBarras = new TextBox
+            {
+                Name = "txtCodigoBarras",
+                Font = new Font("Consolas", 10.5F),
+                ForeColor = TemaCafeteria.TextoOscuro,
+                PlaceholderText = "Vacío = se genera automáticamente",
+                MaxLength = 100,
+                Location = new Point(22, 260),
+                Width = 310
+            };
+
             PanelRedondeado pnlNota = new PanelRedondeado
             {
                 Name = "pnlNota",
-                Location = new Point(22, 246),
-                Size = new Size(310, 88),
+                Location = new Point(22, 296),
+                Size = new Size(310, 56),
                 RadioBorde = 10,
                 BackColor = ColorTranslator.FromHtml("#EDF4F0")
             };
 
             Label lblNota = new Label
             {
-                Text = "ℹ  El lote y su código de barras se generarán al confirmar la recepción. Podrás imprimir la etiqueta después del registro.",
+                Text = "ℹ  Al confirmar se asigna el lote y un código de barras único (EAN-13 interno) si no capturas uno.",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
                 ForeColor = ColorTranslator.FromHtml("#264D3B"),
-                Location = new Point(12, 10),
-                Size = new Size(286, 68)
+                Location = new Point(12, 7),
+                Size = new Size(286, 42)
             };
             pnlNota.Controls.Add(lblNota);
 
@@ -476,7 +527,7 @@ namespace CapaPresentaciòn.Controles
             _cardLote.Controls.AddRange(new Control[]
             {
                 badgeBarcode, lblLoteTitulo, lblLoteSub,
-                pnlBarcodeBox, pnlNota,
+                pnlBarcodeBox, lblBarrasTit, _txtCodigoBarras, pnlNota,
                 lblEstadoTit, lblEstadoVal, lblUbicTit, lblUbicVal
             });
         }
@@ -622,13 +673,10 @@ namespace CapaPresentaciòn.Controles
 
         private void RecalcularCostoEstimado()
         {
-            string cantTexto = _txtCantidad.Text.Replace("$", "").Trim();
-            string costoTexto = _txtCostoUnitario.Text.Replace("$", "").Trim();
+            decimal cantidad = EntradaNumerica.LeerCantidadOCero(_txtCantidad.Text);
+            decimal costoUnitario = EntradaNumerica.LeerImporteOCero(_txtCostoUnitario.Text);
 
-            decimal.TryParse(cantTexto, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cantidad);
-            decimal.TryParse(costoTexto, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal costoUnitario);
-
-            decimal totalEstimado = Math.Round(cantidad * costoUnitario, 2);
+            decimal totalEstimado = Redondeo.Importe(cantidad * costoUnitario);
             _lblCostoEstimadoValor.Text = $"$ {totalEstimado:N2}";
         }
 
@@ -682,6 +730,8 @@ namespace CapaPresentaciòn.Controles
             _lblCostoEstimadoValor.Text = "$ 0.00";
             _dtpRecepcion.Value = DateTime.Now;
             _dtpCaducidad.Value = DateTime.Now.AddMonths(3);
+            _chkSinCaducidad.Checked = false;
+            _txtCodigoBarras.Clear();
             ActualizarVistaPreviaLote();
         }
 
@@ -701,38 +751,51 @@ namespace CapaPresentaciòn.Controles
                 return;
             }
 
-            if (!decimal.TryParse(_txtCantidad.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cant) || cant <= 0 ||
-                !decimal.TryParse(_txtCostoUnitario.Text.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal costo) || costo <= 0)
+            if (!EntradaNumerica.TryLeerCantidad(_txtCantidad.Text, out decimal cant, out string errorCant) || cant <= 0)
             {
-                MessageBox.Show("Ingresa una cantidad inicial y un costo unitario mayores a cero.", "Validación de datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                string mensaje = errorCant.Length > 0 ? $"Cantidad inicial: {errorCant}" : "La cantidad inicial debe ser mayor a cero.";
+                MessageBox.Show(mensaje, "Validación de datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtCantidad.Focus();
                 return;
             }
 
-            if (_dtpCaducidad.Value.Date <= _dtpRecepcion.Value.Date)
+            if (!EntradaNumerica.TryLeerImporte(_txtCostoUnitario.Text, out decimal costo, out string errorCosto) || costo <= 0)
             {
-                MessageBox.Show("La fecha de caducidad debe ser posterior a la fecha de recepción.", "Control PEPS", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                string mensaje = errorCosto.Length > 0 ? $"Costo unitario: {errorCosto}" : "El costo unitario debe ser mayor a cero.";
+                MessageBox.Show(mensaje, "Validación de datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _txtCostoUnitario.Focus();
                 return;
             }
 
-            string codigoLote = _lblCodigoLote.Text.Trim();
-            string codigoBarras = codigoLote.Replace("-", "");
+            DateTime? caducidad = _chkSinCaducidad.Checked ? null : _dtpCaducidad.Value.Date;
+            if (caducidad.HasValue && caducidad.Value <= _dtpRecepcion.Value.Date)
+            {
+                MessageBox.Show("La fecha de caducidad debe ser posterior a la fecha de recepción.\nSi el insumo no caduca, marca \"No aplica\".", "Control PEPS", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _dtpCaducidad.Focus();
+                return;
+            }
 
-            var resultado = _invNegocio.RegistrarEntregaProveedor(
+            // El código de lote y, si no se capturó, el de barras los genera la lógica al confirmar,
+            // verificando que no se repitan (RF-01). La vista previa solo orienta al usuario.
+            var resultado = _invNegocio.RegistrarRecepcion(
                 idProveedor: provSel.IdProveedor,
                 idInsumo: insumoSel.IdInsumo,
                 cantidadRecibida: cant,
                 costoUnitario: costo,
-                fechaCaducidad: _dtpCaducidad.Value.Date,
-                codigoLoteManual: codigoLote,
-                codigoBarrasManual: codigoBarras,
+                fechaRecepcion: _dtpRecepcion.Value,
+                fechaCaducidad: caducidad,
+                codigoLoteManual: null,
+                codigoBarrasManual: string.IsNullOrWhiteSpace(_txtCodigoBarras.Text) ? null : _txtCodigoBarras.Text.Trim(),
                 observaciones: $"Recepción de {provSel.Nombre} ({cant} {insumoSel.UnidadAbreviatura})"
             );
 
             if (!resultado.Exito)
             {
-                MessageBox.Show(resultado.Mensaje, "Error al registrar en MySQL", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(resultado.Mensaje, "No se pudo registrar la recepción", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+
+            RecepcionRegistrada?.Invoke(this, EventArgs.Empty);
 
             MessageBox.Show(
                 $"{resultado.Mensaje}\n\n" +
@@ -824,6 +887,7 @@ namespace CapaPresentaciòn.Controles
             _dtpRecepcion.Width = anchoColumna;
             _dtpCaducidad.Left = xCol2;
             _dtpCaducidad.Width = anchoColumna;
+            _chkSinCaducidad.Location = new Point(xCol2 + anchoColumna - _chkSinCaducidad.Width, 325);
         }
 
         private void AjustarControlesInternosLote(int anchoCardLote, int altoTarjetas)
@@ -838,6 +902,8 @@ namespace CapaPresentaciòn.Controles
                 }
                 _picCodigoBarras.Left = (anchoInterno - _picCodigoBarras.Width) / 2;
             }
+
+            _txtCodigoBarras.Width = anchoInterno;
 
             if (_cardLote.Controls["pnlNota"] is Panel nota)
             {

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using CapaEntidades;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 
 namespace CapaDatos
 {
@@ -135,7 +135,8 @@ namespace CapaDatos
         }
 
         /// <summary>
-        /// Devuelve todos los lotes ordenados bajo criterio PEPS (caducidad más próxima primero, luego fecha de recepción).
+        /// Devuelve los lotes agrupados por insumo y, dentro de cada insumo, en orden PEPS
+        /// (fecha y hora de recepción más antigua primero, RF-02).
         /// </summary>
         public List<Lote> ObtenerLotesPeps(bool soloConDisponibilidad = true)
         {
@@ -163,10 +164,7 @@ namespace CapaDatos
                 INNER JOIN Recepcion r ON l.id_recepcion = r.id_recepcion
                 INNER JOIN Proveedor p ON r.id_proveedor = p.id_proveedor
                 {filtroDisp}
-                ORDER BY l.id_insumo ASC,
-                         CASE WHEN l.fecha_caducidad IS NULL THEN 1 ELSE 0 END ASC,
-                         l.fecha_caducidad ASC,
-                         l.fecha_recepcion ASC;";
+                ORDER BY l.id_insumo ASC, {CriterioPeps.Orden("l")};";
 
             using var conn = ConexionMySql.ObtenerConexion();
             using var cmd = new MySqlCommand(sql, conn);
@@ -198,9 +196,50 @@ namespace CapaDatos
         }
 
         /// <summary>
-        /// Transacción atómica: registra Recepcion, crea Lote y anota MovimientoInventario (ENTREGA).
+        /// Código de barras interno EAN-13 (RF-01): prefijo 20 (uso interno del comercio),
+        /// id del lote a 10 dígitos y dígito verificador. Es único porque el id del lote lo es.
         /// </summary>
-        public int RegistrarRecepcionConLote(Recepcion recepcion, Lote nuevoLote)
+        public static string GenerarCodigoBarrasInterno(int idLote, int prefijo = 20)
+        {
+            string cuerpo = $"{prefijo:00}{idLote:0000000000}";
+            int suma = 0;
+            for (int i = 0; i < 12; i++)
+                suma += (cuerpo[i] - '0') * (i % 2 == 0 ? 1 : 3);
+            int verificador = (10 - suma % 10) % 10;
+            return cuerpo + verificador;
+        }
+
+        public bool ExisteCodigoLote(string codigoLote)
+        {
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand("SELECT COUNT(*) FROM Lote WHERE codigo_lote = @c;", conn);
+            cmd.Parameters.AddWithValue("@c", codigoLote.Trim());
+            return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+        }
+
+        public bool ExisteCodigoBarras(string codigoBarras)
+        {
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand("SELECT COUNT(*) FROM Lote WHERE codigo_barras = @c;", conn);
+            cmd.Parameters.AddWithValue("@c", codigoBarras.Trim());
+            return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+        }
+
+        /// <summary>Cuántos lotes ya usan el prefijo de código (p. ej. "LOT-LEC-20261117-").</summary>
+        public int ContarLotesConPrefijo(string prefijoCodigo)
+        {
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand("SELECT COUNT(*) FROM Lote WHERE codigo_lote LIKE @p;", conn);
+            cmd.Parameters.AddWithValue("@p", prefijoCodigo.Replace("%", "").Replace("_", "\\_") + "%");
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+
+        /// <summary>
+        /// Transacción atómica: registra Recepcion, crea Lote y anota MovimientoInventario (ENTREGA).
+        /// Si el lote no trae código de barras, genera uno único con <see cref="GenerarCodigoBarrasInterno"/>.
+        /// Devuelve el id del lote y el código de barras guardado.
+        /// </summary>
+        public (int IdLote, string CodigoBarras) RegistrarRecepcionConLote(Recepcion recepcion, Lote nuevoLote)
         {
             using var conn = ConexionMySql.ObtenerConexion();
             using var tx = conn.BeginTransaction();
@@ -252,6 +291,25 @@ namespace CapaDatos
                     idLote = Convert.ToInt32(cmdLote.ExecuteScalar());
                 }
 
+                // 2b. Identificador único (RF-01) si el usuario no capturó un código de barras
+                string codigoBarras = nuevoLote.CodigoBarras?.Trim() ?? string.Empty;
+                if (codigoBarras.Length == 0)
+                {
+                    // Prefijos 20–29 = uso interno; se cambia de prefijo solo si alguien capturó a mano ese mismo número
+                    for (int prefijo = 20; prefijo <= 29; prefijo++)
+                    {
+                        codigoBarras = GenerarCodigoBarrasInterno(idLote, prefijo);
+                        using var cmdExiste = new MySqlCommand("SELECT COUNT(*) FROM Lote WHERE codigo_barras = @c;", conn, tx);
+                        cmdExiste.Parameters.AddWithValue("@c", codigoBarras);
+                        if (Convert.ToInt32(cmdExiste.ExecuteScalar()) == 0) break;
+                    }
+
+                    using var cmdBarras = new MySqlCommand("UPDATE Lote SET codigo_barras = @c WHERE id_lote = @id;", conn, tx);
+                    cmdBarras.Parameters.AddWithValue("@c", codigoBarras);
+                    cmdBarras.Parameters.AddWithValue("@id", idLote);
+                    cmdBarras.ExecuteNonQuery();
+                }
+
                 // 3. Registrar MovimientoInventario (ENTREGA)
                 const string sqlMov = @"
                     INSERT INTO MovimientoInventario (
@@ -272,13 +330,72 @@ namespace CapaDatos
                 }
 
                 tx.Commit();
-                return idLote;
+                return (idLote, codigoBarras);
             }
             catch
             {
                 tx.Rollback();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Kardex de un lote (RF-03): todos sus movimientos en orden cronológico, con el
+        /// documento que los originó (recepción/proveedor, folio de venta y producto, o merma).
+        /// </summary>
+        public List<MovimientoKardex> ObtenerKardexLote(int idLote)
+        {
+            const string sql = @"
+                SELECT m.id_movimiento, m.tipo, m.cantidad, m.fecha_movimiento, m.observaciones,
+                       u.nombre       AS usuario,
+                       l.id_recepcion,
+                       pr.nombre      AS proveedor,
+                       v.folio,
+                       p.nombre       AS producto,
+                       m.id_merma,
+                       mm.motivo      AS motivo_merma
+                FROM MovimientoInventario m
+                INNER JOIN Usuario u     ON u.id_usuario    = m.id_usuario
+                INNER JOIN Lote l        ON l.id_lote       = m.id_lote
+                LEFT  JOIN Recepcion r   ON r.id_recepcion  = l.id_recepcion
+                LEFT  JOIN Proveedor pr  ON pr.id_proveedor = r.id_proveedor
+                LEFT  JOIN DetalleVenta d ON d.id_detalle_venta = m.id_detalle_venta
+                LEFT  JOIN Venta v       ON v.id_venta      = d.id_venta
+                LEFT  JOIN Producto p    ON p.id_producto   = d.id_producto
+                LEFT  JOIN Merma mm      ON mm.id_merma     = m.id_merma
+                WHERE m.id_lote = @id_lote
+                ORDER BY m.fecha_movimiento ASC, m.id_movimiento ASC;";
+
+            var lista = new List<MovimientoKardex>();
+
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@id_lote", idLote);
+            using var reader = cmd.ExecuteReader();
+
+            string? Texto(string col) => reader.IsDBNull(reader.GetOrdinal(col)) ? null : reader.GetString(col);
+            int? Entero(string col) => reader.IsDBNull(reader.GetOrdinal(col)) ? null : reader.GetInt32(col);
+
+            while (reader.Read())
+            {
+                lista.Add(new MovimientoKardex
+                {
+                    IdMovimiento = reader.GetInt32("id_movimiento"),
+                    Tipo = reader.GetString("tipo"),
+                    Cantidad = reader.GetDecimal("cantidad"),
+                    FechaMovimiento = reader.GetDateTime("fecha_movimiento"),
+                    Observaciones = Texto("observaciones"),
+                    Usuario = reader.GetString("usuario"),
+                    IdRecepcion = Entero("id_recepcion"),
+                    Proveedor = Texto("proveedor"),
+                    FolioVenta = Texto("folio"),
+                    Producto = Texto("producto"),
+                    IdMerma = Entero("id_merma"),
+                    MotivoMerma = Texto("motivo_merma")
+                });
+            }
+
+            return lista;
         }
 
         public int ContarLotesHoyPorInsumo(int idInsumo)

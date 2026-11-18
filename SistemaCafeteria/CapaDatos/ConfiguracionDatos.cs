@@ -1,6 +1,6 @@
 ﻿using System;
 using CapaEntidades;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 
 namespace CapaDatos
 {

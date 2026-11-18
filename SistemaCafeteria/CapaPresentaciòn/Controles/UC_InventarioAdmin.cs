@@ -1,31 +1,38 @@
-﻿using CapaLogica;
+﻿using CapaEntidades;
+using CapaLogica;
 using CapaPresentacion.Estilos;
-using CapaPresentaciòn.Estilos;
-using System;
+using CapaPresentaciòn.Formularios;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
+    /// <summary>
+    /// Gestión de inventario del Administrador (RF-03, RF-08, RIU-02, RIU-03): insumos con su
+    /// semáforo, % de abasto y aviso de reabastecimiento; sus lotes en orden PEPS con recepción,
+    /// cantidades, proveedor y el kardex real de cada lote.
+    /// </summary>
     public partial class UC_InventarioAdmin : UserControl
     {
-        private record LoteAdminViewModel(
-            string Insumo,
-            string Categoria,
-            string CodigoLote,
-            DateTime FechaRecepcion,
-            DateTime FechaCaducidad,
-            decimal CantidadInicial,
-            decimal CantidadDisponible,
-            decimal StockMinimo,
-            string Unidad,
-            string Proveedor
-        );
+        private static readonly CultureInfo Mx = CultureInfo.GetCultureInfo("es-MX");
+        private static readonly NivelSemaforo[] Niveles = { NivelSemaforo.Verde, NivelSemaforo.Amarillo, NivelSemaforo.Rojo, NivelSemaforo.Blanco };
 
-        private readonly List<LoteAdminViewModel> _lotesAdmin = new();
+        private sealed class FilaInventario
+        {
+            public ResumenInsumoInventario Resumen { get; init; } = null!;
+            public Lote? Lote { get; init; }
+            public int OrdenPeps { get; init; }   // 0 = lote agotado (ya no entra en el orden de salida)
+        }
+
+        private readonly InventarioNegocio _invNegocio = new();
+        private readonly ConfiguracionNegocio _configNegocio = new();
+        private readonly List<ResumenInsumoInventario> _resumenes = new();
+        private ConfiguracionGeneral _config = new();
 
         // Barra superior
         private Panel _pnlTopBar = null!;
@@ -33,66 +40,44 @@ namespace CapaPresentaciòn.Controles.Admin
         private Label _lblTitulo = null!;
         private Label _lblSubtitulo = null!;
 
-        // 3 Tarjetas KPI del semáforo (igual que en el inventario operativo)
-        private PanelRedondeado _cardOptimo = null!;
-        private Label _lblConteoOptimo = null!;
-        private PanelRedondeado _cardPreventivo = null!;
-        private Label _lblConteoPreventivo = null!;
-        private PanelRedondeado _cardCritico = null!;
-        private Label _lblConteoCritico = null!;
+        // 4 tarjetas KPI del semáforo
+        private readonly Dictionary<NivelSemaforo, (PanelRedondeado Card, Label Conteo, Label Descripcion)> _tarjetas = new();
 
-        // Barra de herramientas (Filtro + Buscador + Nuevo Lote)
+        // Barra de herramientas
         private Panel _pnlToolbar = null!;
         private TextBox _txtBuscar = null!;
         private ComboBox _cmbFiltroSemaforo = null!;
+        private CheckBox _chkLotesAgotados = null!;
         private Button _btnNuevoLote = null!;
 
-        // Contenedor de tabla PEPS
+        // Tabla PEPS
         private PanelRedondeado _cardTabla = null!;
         private DataGridView _dgvInventario = null!;
 
         public UC_InventarioAdmin()
         {
-         
-            CargarDatosIniciales();
             ConfigurarInterfaz();
-            ActualizarContadoresKpi();
-            FiltrarTabla();
+
+            // Misma regla que las otras pantallas de inventario: carga al abrirse y recarga al volver
+            RecargaAutomatica.AlMostrar(this, CargarDatos);
         }
 
-        private void CargarDatosIniciales()
+        // =====================================================================
+        // CARGA DESDE MYSQL
+        // =====================================================================
+
+        private void CargarDatos()
         {
-            _lotesAdmin.Clear();
+            _resumenes.Clear();
 
             try
             {
-                var invNegocio = new InventarioNegocio();
-
                 // Inserta proveedores, insumos y lotes semilla en MySQL solo si la tabla Insumo está vacía
-                invNegocio.AsegurarDatosInicialesInventario();
+                _invNegocio.AsegurarDatosInicialesInventario();
 
-                // Obtiene todos los lotes activos ordenados por criterio PEPS (caducidad más próxima primero)
-                var lotesMysql = invNegocio.ObtenerLotesPeps(soloDisponibles: true);
-
-                foreach (var l in lotesMysql)
-                {
-                    // Como la tabla Insumo maneja StockMaximo, calculamos un umbral mínimo referencial (20%) para tu ViewModel
-                    decimal stockMinimoRef = Math.Round(l.StockMaximoInsumo * 0.20m, 2);
-                    DateTime fechaCad = l.FechaCaducidad ?? DateTime.Today.AddYears(1);
-
-                    _lotesAdmin.Add(new LoteAdminViewModel(
-                        l.NombreInsumo,
-                        "Insumos Almacén",
-                        l.CodigoLote,
-                        l.FechaRecepcion,
-                        fechaCad,
-                        l.CantidadInicial,
-                        l.CantidadDisponible,
-                        stockMinimoRef,
-                        l.UnidadAbreviatura,
-                        l.NombreProveedor
-                    ));
-                }
+                _config = _configNegocio.ObtenerConfiguracionActual();
+                // Insumos por urgencia (Blanco, Rojo, Amarillo, Verde) y sus lotes en orden PEPS
+                _resumenes.AddRange(_invNegocio.ObtenerResumenInventarioCompleto(_chkLotesAgotados.Checked));
             }
             catch (Exception ex)
             {
@@ -100,10 +85,16 @@ namespace CapaPresentaciòn.Controles.Admin
                     $"No se pudieron cargar los lotes desde MySQL:\n{ex.Message}",
                     "Error de conexión",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                    MessageBoxIcon.Error);
             }
+
+            ActualizarContadoresKpi();
+            FiltrarTabla();
         }
+
+        // =====================================================================
+        // INTERFAZ
+        // =====================================================================
 
         private void ConfigurarInterfaz()
         {
@@ -144,7 +135,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _lblSubtitulo = new Label
             {
-                Text = "Tabla de inventario desglosada por lotes PEPS con detalles de recepción, cantidad disponible, proveedor e historial de movimientos.",
+                Text = "Insumos con semáforo y % de abasto; sus lotes en orden PEPS (recepción más antigua primero) con el historial de movimientos de cada lote.",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(34, 65),
@@ -153,35 +144,15 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _pnlTopBar.Controls.AddRange(new Control[] { _lblRuta, _lblTitulo, _lblSubtitulo });
 
-            // 2. Tarjetas KPI superiores del semáforo
-            _cardOptimo = CrearTarjetaSemaforo(
-                "●  ESTADO ÓPTIMO",
-                "Stock saludable y vigencia amplia",
-                ColorTranslator.FromHtml("#1F4E35"),
-                ColorTranslator.FromHtml("#EAF3EE"),
-                out _lblConteoOptimo,
-                () => AlternarFiltroKpi(1)
-            );
+            // 2. Tarjetas KPI del semáforo (clic = filtrar por ese estado)
+            for (int i = 0; i < Niveles.Length; i++)
+            {
+                NivelSemaforo nivel = Niveles[i];
+                int indiceCombo = i + 1;
+                _tarjetas[nivel] = CrearTarjetaSemaforo(nivel, () => AlternarFiltroKpi(indiceCombo));
+            }
 
-            _cardPreventivo = CrearTarjetaSemaforo(
-                "▲  ALERTA PREVENTIVA",
-                "Stock bajo o próximo a caducar (≤ 7 días)",
-                ColorTranslator.FromHtml("#B26A00"),
-                ColorTranslator.FromHtml("#FFF4E5"),
-                out _lblConteoPreventivo,
-                () => AlternarFiltroKpi(2)
-            );
-
-            _cardCritico = CrearTarjetaSemaforo(
-                "■  NIVEL CRÍTICO",
-                "Requiere reabastecimiento inmediato",
-                ColorTranslator.FromHtml("#C62828"),
-                ColorTranslator.FromHtml("#FFEBEE"),
-                out _lblConteoCritico,
-                () => AlternarFiltroKpi(3)
-            );
-
-            // 3. Barra de herramientas (Filtro semáforo, Buscador y Botón Añadir Lote)
+            // 3. Barra de herramientas
             _pnlToolbar = new Panel { BackColor = Color.Transparent };
 
             _cmbFiltroSemaforo = new ComboBox
@@ -189,19 +160,26 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 10F),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Location = new Point(0, 6),
-                Width = 220
+                Width = 210
             };
-            _cmbFiltroSemaforo.Items.AddRange(new object[]
-            {
-                "Todos los estados",
-                "● Óptimo (Verde)",
-                "▲ Preventivo (Amarillo)",
-                "■ Crítico (Rojo)"
-            });
+            _cmbFiltroSemaforo.Items.Add("Todos los estados");
+            foreach (var nivel in Niveles)
+                _cmbFiltroSemaforo.Items.Add($"● {nivel} · {SemaforoExistencias.Descripcion(nivel)}");
             _cmbFiltroSemaforo.SelectedIndex = 0;
             _cmbFiltroSemaforo.SelectedIndexChanged += (s, e) => FiltrarTabla();
 
-            Panel pnlBuscar = new Panel
+            _chkLotesAgotados = new CheckBox
+            {
+                Text = "Incluir lotes agotados",
+                Font = new Font("Segoe UI", 9.5F),
+                ForeColor = TemaCafeteria.TextoOscuro,
+                Location = new Point(226, 10),
+                AutoSize = true,
+                Cursor = Cursors.Hand
+            };
+            _chkLotesAgotados.CheckedChanged += (s, e) => CargarDatos();
+
+            var pnlBuscar = new Panel
             {
                 Name = "pnlBuscar",
                 Size = new Size(310, 38),
@@ -209,7 +187,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 BorderStyle = BorderStyle.FixedSingle
             };
 
-            Label lblLupa = new Label
+            var lblLupa = new Label
             {
                 Text = "🔍",
                 Font = new Font("Segoe UI", 10F),
@@ -244,9 +222,9 @@ namespace CapaPresentaciòn.Controles.Admin
             _btnNuevoLote.FlatAppearance.BorderSize = 0;
             _btnNuevoLote.Click += BtnNuevoLote_Click;
 
-            _pnlToolbar.Controls.AddRange(new Control[] { _cmbFiltroSemaforo, pnlBuscar, _btnNuevoLote });
+            _pnlToolbar.Controls.AddRange(new Control[] { _cmbFiltroSemaforo, _chkLotesAgotados, pnlBuscar, _btnNuevoLote });
 
-            // 4. Tarjeta con DataGridView PEPS
+            // 4. Tarjeta con la tabla PEPS
             _cardTabla = new PanelRedondeado
             {
                 RadioBorde = 16,
@@ -256,60 +234,51 @@ namespace CapaPresentaciòn.Controles.Admin
             ConfigurarTablaInventario();
             _cardTabla.Controls.Add(_dgvInventario);
 
-            Controls.AddRange(new Control[]
-            {
-                _cardOptimo, _cardPreventivo, _cardCritico,
-                _pnlToolbar, _cardTabla, _pnlTopBar
-            });
+            Controls.AddRange(_tarjetas.Values.Select(t => (Control)t.Card).ToArray());
+            Controls.AddRange(new Control[] { _pnlToolbar, _cardTabla, _pnlTopBar });
 
             Resize += (s, e) => AjustarLayoutResponsivo();
             Load += (s, e) => AjustarLayoutResponsivo();
             AjustarLayoutResponsivo();
         }
 
-        private PanelRedondeado CrearTarjetaSemaforo(
-            string textoBadge,
-            string subtexto,
-            Color colorAcento,
-            Color fondoBadge,
-            out Label lblConteo,
-            Action onClick)
+        private (PanelRedondeado Card, Label Conteo, Label Descripcion) CrearTarjetaSemaforo(NivelSemaforo nivel, Action onClick)
         {
-            PanelRedondeado card = new PanelRedondeado
+            var card = new PanelRedondeado
             {
                 RadioBorde = 14,
                 BackColor = Color.White,
                 Cursor = Cursors.Hand
             };
 
-            Label lblBadge = new Label
+            var lblBadge = new Label
             {
-                Text = textoBadge,
+                Text = $"●  {nivel.ToString().ToUpperInvariant()} · {SemaforoExistencias.Descripcion(nivel).ToUpperInvariant()}",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
-                ForeColor = colorAcento,
-                BackColor = fondoBadge,
-                Location = new Point(18, 14),
+                ForeColor = SemaforoVisual.Acento(nivel),
+                BackColor = SemaforoVisual.FondoSuave(nivel),
+                Location = new Point(16, 14),
                 Padding = new Padding(8, 3, 8, 3),
                 AutoSize = true,
                 Cursor = Cursors.Hand
             };
 
-            lblConteo = new Label
+            var lblConteo = new Label
             {
-                Text = "0 lotes",
+                Text = "0 insumos",
                 Font = new Font("Segoe UI", 17F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
-                Location = new Point(16, 44),
+                Location = new Point(14, 44),
                 AutoSize = true,
                 Cursor = Cursors.Hand
             };
 
-            Label lblDesc = new Label
+            var lblDesc = new Label
             {
-                Text = subtexto,
+                Text = "",
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
                 ForeColor = TemaCafeteria.TextoSecundario,
-                Location = new Point(18, 84), // Separación limpia para que no se corte con el número grande
+                Location = new Point(16, 84),
                 AutoSize = true,
                 Cursor = Cursors.Hand
             };
@@ -321,7 +290,7 @@ namespace CapaPresentaciòn.Controles.Admin
             lblDesc.Click += EjecutarFiltro;
 
             card.Controls.AddRange(new Control[] { lblBadge, lblConteo, lblDesc });
-            return card;
+            return (card, lblConteo, lblDesc);
         }
 
         private void AlternarFiltroKpi(int indiceEstado)
@@ -331,19 +300,21 @@ namespace CapaPresentaciòn.Controles.Admin
 
         private void ActualizarContadoresKpi()
         {
-            int optimos = 0, preventivos = 0, criticos = 0;
-
-            foreach (var l in _lotesAdmin)
+            foreach (var (nivel, tarjeta) in _tarjetas)
             {
-                string estado = ObtenerEstadoSemaforo(l);
-                if (estado == "VERDE") optimos++;
-                else if (estado == "AMARILLO") preventivos++;
-                else criticos++;
-            }
+                int n = _resumenes.Count(r => r.Semaforo == nivel);
+                tarjeta.Conteo.Text = $"{n} {(n == 1 ? "insumo" : "insumos")}";
 
-            _lblConteoOptimo.Text = $"{optimos} {(optimos == 1 ? "lote" : "lotes")}";
-            _lblConteoPreventivo.Text = $"{preventivos} {(preventivos == 1 ? "lote" : "lotes")}";
-            _lblConteoCritico.Text = $"{criticos} {(criticos == 1 ? "lote" : "lotes")}";
+                string rango = nivel switch
+                {
+                    NivelSemaforo.Verde => $"≥ {_config.VerdeMinimo:0.##} % del stock máximo",
+                    NivelSemaforo.Amarillo => $"{_config.AmarilloMinimo:0.##} % – {_config.AmarilloMaximo:0.##} %",
+                    NivelSemaforo.Rojo => $"≤ {_config.RojoMaximo:0.##} % (con existencia)",
+                    _ => "Sin existencias (0)"
+                };
+                string? aviso = SemaforoExistencias.AvisoReabastecimiento(nivel);
+                tarjeta.Descripcion.Text = aviso == null ? rango : $"{rango} · {aviso}";
+            }
         }
 
         private void ConfigurarTablaInventario()
@@ -360,8 +331,9 @@ namespace CapaPresentaciòn.Controles.Admin
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 MultiSelect = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                ColumnHeadersHeight = 44,
-                RowTemplate = { Height = 46 },
+                ColumnHeadersHeight = 46,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                RowTemplate = { Height = 44 },
                 EnableHeadersVisualStyles = false,
                 GridColor = TemaCafeteria.BordeSuave,
                 CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal
@@ -371,9 +343,10 @@ namespace CapaPresentaciòn.Controles.Admin
             {
                 BackColor = ColorTranslator.FromHtml("#F5F2EE"),
                 ForeColor = TemaCafeteria.TextoOscuro,
-                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 Alignment = DataGridViewContentAlignment.MiddleLeft,
-                Padding = new Padding(10, 0, 10, 0)
+                Padding = new Padding(6, 0, 6, 0),
+                WrapMode = DataGridViewTriState.True
             };
 
             _dgvInventario.DefaultCellStyle = new DataGridViewCellStyle
@@ -383,148 +356,208 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 SelectionBackColor = ColorTranslator.FromHtml("#F9F4EE"),
                 SelectionForeColor = TemaCafeteria.TextoOscuro,
-                Padding = new Padding(10, 0, 10, 0)
+                Padding = new Padding(6, 0, 6, 0)
             };
 
-            _dgvInventario.Columns.Add(new DataGridViewTextBoxColumn { Name = "colInsumo", HeaderText = "Insumo", FillWeight = 18 });
-            _dgvInventario.Columns.Add(new DataGridViewTextBoxColumn { Name = "colLote", HeaderText = "Lote", FillWeight = 13 });
-            _dgvInventario.Columns.Add(new DataGridViewTextBoxColumn { Name = "colFecha", HeaderText = "Fecha/Hora Recepción", FillWeight = 16 });
-            _dgvInventario.Columns.Add(new DataGridViewTextBoxColumn { Name = "colInicial", HeaderText = "Cantidad Inicial", FillWeight = 12 });
-            _dgvInventario.Columns.Add(new DataGridViewTextBoxColumn { Name = "colDisponible", HeaderText = "Cantidad Disponible", FillWeight = 13 });
-            _dgvInventario.Columns.Add(new DataGridViewTextBoxColumn { Name = "colProveedor", HeaderText = "Proveedor", FillWeight = 16 });
+            AgregarColumna("colInsumo", "Insumo", 14);
+            AgregarColumna("colTotal", "Existencia total", 10, true);
+            AgregarColumna("colPorcentaje", "% abasto", 7, true);
+            AgregarColumna("colSemaforo", "Semáforo", 9);
+            AgregarColumna("colReabasto", "Reabastecimiento", 12);
+            AgregarColumna("colLote", "Lote (orden PEPS)", 14);
+            AgregarColumna("colFecha", "Fecha/Hora recepción", 12);
+            AgregarColumna("colInicial", "Cant. inicial", 9, true);
+            AgregarColumna("colDisponible", "Cant. disponible", 9, true);
+            AgregarColumna("colProveedor", "Proveedor", 13);
 
             var colHistorial = new DataGridViewLinkColumn
             {
                 Name = "colHistorial",
-                HeaderText = "Historial de Movimientos",
-                Text = "Ver Historial",
-                UseColumnTextForLinkValue = true,
+                HeaderText = "Historial de movimientos",
                 LinkColor = TemaCafeteria.CafePrimario,
                 ActiveLinkColor = TemaCafeteria.TextoOscuro,
                 TrackVisitedState = false,
-                FillWeight = 15
+                FillWeight = 11,
+                SortMode = DataGridViewColumnSortMode.NotSortable
             };
             _dgvInventario.Columns.Add(colHistorial);
 
-            var colSemaforo = new DataGridViewTextBoxColumn
-            {
-                Name = "colSemaforo",
-                HeaderText = "Semáforo",
-                FillWeight = 9
-            };
-            colSemaforo.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            colSemaforo.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
-            _dgvInventario.Columns.Add(colSemaforo);
-
             _dgvInventario.CellPainting += (s, e) =>
             {
-                if (e.RowIndex >= 0 && e.ColumnIndex == _dgvInventario.Columns["colSemaforo"]!.Index)
+                if (e.RowIndex >= 0 && e.ColumnIndex == _dgvInventario.Columns["colSemaforo"]!.Index &&
+                    _dgvInventario.Rows[e.RowIndex].Tag is FilaInventario fila && !string.IsNullOrEmpty(e.Value as string))
                 {
-                    e.PaintBackground(e.ClipBounds, true);
-                    string estado = e.Value?.ToString() ?? "VERDE";
-
-                    Color colorCirculo = estado switch
-                    {
-                        "ROJO" => ColorTranslator.FromHtml("#D32F2F"),
-                        "AMARILLO" => ColorTranslator.FromHtml("#FBC02D"),
-                        _ => ColorTranslator.FromHtml("#2E7D32")
-                    };
-
-                    int diametro = 22;
-                    int x = e.CellBounds.X + (e.CellBounds.Width - diametro) / 2;
-                    int y = e.CellBounds.Y + (e.CellBounds.Height - diametro) / 2;
-
-                    e.Graphics!.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    using var pen = new Pen(colorCirculo, 3F);
-                    e.Graphics.DrawEllipse(pen, x, y, diametro, diametro);
-
-                    e.Handled = true;
+                    SemaforoVisual.PintarCelda(e, fila.Resumen.Semaforo);
                 }
             };
 
             _dgvInventario.CellContentClick += (s, e) =>
             {
                 if (e.RowIndex >= 0 && e.ColumnIndex == _dgvInventario.Columns["colHistorial"]!.Index)
-                {
-                    string codigoLote = _dgvInventario.Rows[e.RowIndex].Cells["colLote"].Value?.ToString() ?? "";
-                    var lote = _lotesAdmin.FirstOrDefault(x => x.CodigoLote == codigoLote);
-                    if (lote != null)
-                    {
-                        MostrarDetalleHistorialLote(lote);
-                    }
-                }
+                    AbrirKardex(e.RowIndex);
             };
+            _dgvInventario.CellDoubleClick += (s, e) =>
+            {
+                if (e.RowIndex >= 0) AbrirKardex(e.RowIndex);
+            };
+        }
+
+        private void AgregarColumna(string nombre, string titulo, float peso, bool derecha = false)
+        {
+            var col = new DataGridViewTextBoxColumn
+            {
+                Name = nombre,
+                HeaderText = titulo,
+                FillWeight = peso,
+                SortMode = DataGridViewColumnSortMode.NotSortable
+            };
+            if (derecha)
+            {
+                col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                col.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
+            }
+            _dgvInventario.Columns.Add(col);
         }
 
         private void FiltrarTabla()
         {
-            string busqueda = _txtBuscar.Text.Trim().ToLowerInvariant();
+            string busqueda = Busqueda.Normalizar(_txtBuscar.Text);
             int filtroSem = _cmbFiltroSemaforo.SelectedIndex;
+            NivelSemaforo? filtro = filtroSem >= 1 ? Niveles[filtroSem - 1] : null;
 
-            _dgvInventario.Rows.Clear();
-
-            foreach (var lote in _lotesAdmin.OrderBy(l => l.Insumo).ThenBy(l => l.FechaCaducidad))
+            var filas = new List<FilaInventario>();
+            foreach (var res in _resumenes)
             {
-                string estadoSem = ObtenerEstadoSemaforo(lote);
+                if (filtro.HasValue && res.Semaforo != filtro.Value)
+                    continue;
 
-                if (filtroSem == 1 && estadoSem != "VERDE") continue;
-                if (filtroSem == 2 && estadoSem != "AMARILLO") continue;
-                if (filtroSem == 3 && estadoSem != "ROJO") continue;
+                bool coincideInsumo = Busqueda.Coincide(busqueda, res.Insumo.Nombre, res.Insumo.Categoria);
 
-                if (!string.IsNullOrEmpty(busqueda))
+                if (res.LotesActivos.Count == 0)
                 {
-                    bool coincide = lote.Insumo.ToLowerInvariant().Contains(busqueda) ||
-                                    lote.CodigoLote.ToLowerInvariant().Contains(busqueda) ||
-                                    lote.Proveedor.ToLowerInvariant().Contains(busqueda);
-                    if (!coincide) continue;
+                    if (coincideInsumo) filas.Add(new FilaInventario { Resumen = res });
+                    continue;
                 }
 
-                _dgvInventario.Rows.Add(
-                    lote.Insumo,
-                    lote.CodigoLote,
-                    lote.FechaRecepcion.ToString("yyyy-MM-dd HH:mm"),
-                    $"{lote.CantidadInicial:N2} {lote.Unidad}",
-                    $"{lote.CantidadDisponible:N2} {lote.Unidad}",
-                    lote.Proveedor,
-                    "Ver Historial",
-                    estadoSem
-                );
+                // Lotes ya en orden PEPS; el número indica el orden de salida de los que tienen existencia
+                int orden = 0;
+                foreach (var lote in res.LotesActivos)
+                {
+                    int ordenLote = lote.CantidadDisponible > 0 ? ++orden : 0;
+                    bool coincide = coincideInsumo ||
+                                    Busqueda.Coincide(busqueda, lote.CodigoLote, lote.CodigoBarras, lote.NombreProveedor);
+                    if (coincide)
+                        filas.Add(new FilaInventario { Resumen = res, Lote = lote, OrdenPeps = ordenLote });
+                }
             }
+
+            _dgvInventario.SuspendLayout();
+            _dgvInventario.Rows.Clear();
+
+            ResumenInsumoInventario? anterior = null;
+            foreach (var fila in filas)
+            {
+                var res = fila.Resumen;
+                var ins = res.Insumo;
+                var lote = fila.Lote;
+                string u = ins.UnidadAbreviatura;
+
+                bool primeraDelInsumo = !ReferenceEquals(anterior, res);
+                anterior = res;
+
+                string textoLote = lote == null
+                    ? "Sin lotes con existencia"
+                    : fila.OrdenPeps > 0 ? $"{fila.OrdenPeps}. {lote.CodigoLote}" : $"{lote.CodigoLote} (agotado)";
+
+                int idx = _dgvInventario.Rows.Add(
+                    primeraDelInsumo ? ins.Nombre : "",
+                    primeraDelInsumo ? $"{Cant(ins.StockActualTotal)} {u}" : "",
+                    primeraDelInsumo ? $"{res.PorcentajeStock.ToString("0.0", Mx)} %" : "",
+                    primeraDelInsumo ? res.EtiquetaEstado : "",
+                    primeraDelInsumo ? (res.AvisoReabastecimiento ?? "—") : "",
+                    textoLote,
+                    lote?.FechaRecepcion.ToString("dd/MM/yyyy HH:mm", Mx) ?? "—",
+                    lote == null ? "—" : $"{Cant(lote.CantidadInicial)} {u}",
+                    lote == null ? "—" : $"{Cant(lote.CantidadDisponible)} {u}",
+                    lote?.NombreProveedor ?? "—",
+                    lote == null ? "" : "Ver historial");
+
+                var row = _dgvInventario.Rows[idx];
+                row.Tag = fila;
+
+                if (primeraDelInsumo)
+                {
+                    row.Cells["colInsumo"].Style.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+                    var celdaAviso = row.Cells["colReabasto"];
+                    if (res.AvisoReabastecimiento != null)
+                    {
+                        celdaAviso.Style.ForeColor = SemaforoVisual.Acento(res.Semaforo);
+                        celdaAviso.Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                    }
+                    else
+                    {
+                        celdaAviso.Style.ForeColor = TemaCafeteria.TextoSecundario;
+                    }
+                }
+
+                if (lote == null || fila.OrdenPeps == 0)
+                {
+                    row.Cells["colLote"].Style.ForeColor = TemaCafeteria.TextoSecundario;
+                    row.Cells["colDisponible"].Style.ForeColor = TemaCafeteria.TextoSecundario;
+                }
+                else if (fila.OrdenPeps == 1)
+                {
+                    row.Cells["colLote"].ToolTipText = "Siguiente lote en salir (PEPS: recepción más antigua)";
+                }
+            }
+
+            _dgvInventario.ResumeLayout();
         }
 
-        private static string ObtenerEstadoSemaforo(LoteAdminViewModel lote)
+        private void AbrirKardex(int rowIndex)
         {
-            if (lote.CantidadDisponible <= lote.StockMinimo * 0.5m) return "ROJO";
-            if (lote.CantidadDisponible <= lote.StockMinimo) return "AMARILLO";
-            return "VERDE";
+            if (_dgvInventario.Rows[rowIndex].Tag is FilaInventario { Lote: { } lote })
+                FrmKardexLote.Mostrar(FindForm() ?? (IWin32Window)this, lote);
         }
 
-        private void MostrarDetalleHistorialLote(LoteAdminViewModel lote)
-        {
-            decimal consumido = lote.CantidadInicial - lote.CantidadDisponible;
-            MessageBox.Show(
-                $"HISTORIAL DE MOVIMIENTOS — {lote.CodigoLote}\n" +
-                $"Insumo: {lote.Insumo} | Proveedor: {lote.Proveedor}\n" +
-                $"Caducidad: {lote.FechaCaducidad:dd/MM/yyyy}\n" +
-                $"--------------------------------------------------------\n" +
-                $"1. [{lote.FechaRecepcion:dd/MM/yyyy HH:mm}] ENTRADA POR RECEPCIÓN: +{lote.CantidadInicial:N2} {lote.Unidad}\n" +
-                $"2. [{DateTime.Now.AddDays(-2):dd/MM/yyyy 14:20}] SALIDA POR VENTAS POS: -{consumido:N2} {lote.Unidad}\n" +
-                $"--------------------------------------------------------\n" +
-                $"Existencia disponible actual: {lote.CantidadDisponible:N2} {lote.Unidad}",
-                $"Trazabilidad PEPS ({lote.CodigoLote})",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
-        }
+        private static string Cant(decimal valor) => FormatoInventario.Numero(valor);
 
+        /// <summary>
+        /// RF-01: abre la misma pantalla de recepción de mercancía que usa el cajero, en una ventana
+        /// modal. Al registrar un lote se recarga el inventario para verlo de inmediato.
+        /// </summary>
         private void BtnNuevoLote_Click(object? sender, EventArgs e)
         {
-            MessageBox.Show(
-                "Desde este acceso el Administrador puede dar de alta un nuevo insumo maestro o registrar un lote directo con asignación de proveedor y stock mínimo.",
-                "Alta Rápida de Lote / Insumo",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            var permiso = Permisos.Verificar(Operacion.RegistrarRecepcion);
+            if (!permiso.Exito)
+            {
+                MessageBox.Show(permiso.Mensaje, "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            bool huboCambios = false;
+            using var ventana = new Form
+            {
+                Text = "Registrar lote · Recepción de mercancía",
+                StartPosition = FormStartPosition.CenterParent,
+                Size = new Size(1240, 800),
+                MinimumSize = new Size(1000, 700),
+                ShowInTaskbar = false,
+                MinimizeBox = false,
+                BackColor = TemaCafeteria.FondoCrema
+            };
+
+            var recepcion = new UC_RecepcionMercancia
+            {
+                Dock = DockStyle.Fill,
+                Ruta = "ADMINISTRACIÓN / INVENTARIO / REGISTRAR LOTE"
+            };
+            recepcion.RecepcionRegistrada += (s, ev) => huboCambios = true;
+            ventana.Controls.Add(recepcion);
+            ventana.ShowDialog(FindForm());
+
+            if (huboCambios)
+                CargarDatos();
         }
 
         private void AjustarLayoutResponsivo()
@@ -534,15 +567,18 @@ namespace CapaPresentaciòn.Controles.Admin
             int margenX = 32;
             int anchoUtil = Math.Max(760, ClientSize.Width - (margenX * 2));
 
-            // 1. Fila de 3 tarjetas KPI superiores (114 px de alto)
+            // 1. Fila de 4 tarjetas KPI (Verde, Amarillo, Rojo, Blanco)
             int yKpi = _pnlTopBar.Height + 16;
             int altoKpi = 114;
-            int gapKpi = 18;
-            int anchoKpi = (anchoUtil - (gapKpi * 2)) / 3;
+            int gapKpi = 14;
+            int anchoKpi = (anchoUtil - (gapKpi * 3)) / 4;
 
-            _cardOptimo.Bounds = new Rectangle(margenX, yKpi, anchoKpi, altoKpi);
-            _cardPreventivo.Bounds = new Rectangle(margenX + anchoKpi + gapKpi, yKpi, anchoKpi, altoKpi);
-            _cardCritico.Bounds = new Rectangle(margenX + (anchoKpi + gapKpi) * 2, yKpi, anchoUtil - ((anchoKpi + gapKpi) * 2), altoKpi);
+            for (int i = 0; i < Niveles.Length; i++)
+            {
+                int x = margenX + i * (anchoKpi + gapKpi);
+                int ancho = i == Niveles.Length - 1 ? margenX + anchoUtil - x : anchoKpi;
+                _tarjetas[Niveles[i]].Card.Bounds = new Rectangle(x, yKpi, ancho, altoKpi);
+            }
 
             // 2. Barra de filtros y búsqueda
             int topToolbar = yKpi + altoKpi + 14;

@@ -1,27 +1,37 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Printing;
-using System.Globalization;
 using System.IO;
 using System.Windows.Forms;
+using CapaEntidades;
+using CapaLogica;
 using CapaPresentacion.Estilos;
+using CapaPresentaciòn.Reportes;
 
 namespace CapaPresentaciòn.Controles.Admin
 {
+    /// <summary>
+    /// Pantalla 13: Reporte financiero (RF-10, RIU-06). Datos reales de MySQL a través de ReporteNegocio.
+    /// El selector "Ver" muestra el resumen consolidado o el detalle de cada reporte (5.1–5.4).
+    /// </summary>
     public partial class UC_ReporteFinanciero : UserControl
     {
-        private record FilaReporteFinanciero(
-            string Categoria,
-            string Descripcion,
-            string VolumenUnidades,
-            decimal CostoValorTotal,
-            string Estado
-        );
+        private const string VistaResumen = "Resumen consolidado";
 
-        private readonly List<FilaReporteFinanciero> _filasReporte = new();
-        private readonly CultureInfo _culturaMxn = CultureInfo.GetCultureInfo("es-MX");
+        private static readonly (string Texto, SeccionReporte? Seccion)[] Vistas =
+        {
+            (VistaResumen, null),
+            ("5.1 Ventas", SeccionReporte.Ventas),
+            ("5.2 Consumo de insumos", SeccionReporte.Consumo),
+            ("5.3 Existencias", SeccionReporte.Existencias),
+            ("5.4 Mermas", SeccionReporte.Mermas)
+        };
+
+        private readonly ReporteNegocio _negocio = new();
+        private ReporteFinanciero? _reporte;
+        private TablaReporte? _tablaActual;
 
         // Barra superior
         private Panel _pnlTopBar = null!;
@@ -34,30 +44,241 @@ namespace CapaPresentaciòn.Controles.Admin
         private DateTimePicker _dtpFechaInicial = null!;
         private DateTimePicker _dtpFechaFinal = null!;
         private Button _btnGenerar = null!;
+        private Label _lblEstadoPeriodo = null!;
 
         // 4 Tarjetas KPI
         private PanelRedondeado _cardKpiVentas = null!;
         private Label _lblKpiVentasVal = null!;
+        private Label _lblKpiVentasSub = null!;
         private PanelRedondeado _cardKpiConsumo = null!;
         private Label _lblKpiConsumoVal = null!;
+        private Label _lblKpiConsumoSub = null!;
         private PanelRedondeado _cardKpiExistencias = null!;
         private Label _lblKpiExistenciasVal = null!;
         private Label _lblKpiExistenciasSub = null!;
         private PanelRedondeado _cardKpiMermas = null!;
         private Label _lblKpiMermasVal = null!;
+        private Label _lblKpiMermasSub = null!;
 
-        // Tabla consolidada + botón Exportar reporte completo a PDF
+        // Tabla (resumen o detalle) + exportación a PDF
         private PanelRedondeado _cardTabla = null!;
         private Label _lblTablaTitulo = null!;
+        private Label _lblVer = null!;
+        private ComboBox _cmbVista = null!;
         private Button _btnExportarTodoPdf = null!;
         private DataGridView _dgvReporte = null!;
+        private Label _lblPieTabla = null!;
 
         public UC_ReporteFinanciero()
         {
-           
             ConfigurarInterfaz();
-            CargarDatosPeriodo();
+
+            Load += (s, e) =>
+            {
+                if (LicenseManager.UsageMode == LicenseUsageMode.Designtime || DesignMode)
+                    return;
+
+                GenerarReporte(mostrarErrores: true);
+            };
         }
+
+        // =====================================================================
+        // DATOS
+        // =====================================================================
+
+        private void GenerarReporte(bool mostrarErrores)
+        {
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                var resultado = _negocio.GenerarReporte(_dtpFechaInicial.Value.Date, _dtpFechaFinal.Value.Date);
+                if (!resultado.Exito || resultado.Reporte == null)
+                {
+                    if (mostrarErrores)
+                        MessageBox.Show(resultado.Mensaje, "No se pudo generar el reporte", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                _reporte = resultado.Reporte;
+                MostrarIndicadores(_reporte);
+                MostrarVistaSeleccionada();
+
+                _lblEstadoPeriodo.Text = $"Periodo {_reporte.Desde:dd/MM/yyyy} – {_reporte.Hasta:dd/MM/yyyy} · generado {_reporte.GeneradoEn:HH:mm}";
+                _btnExportarTodoPdf.Enabled = true;
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
+        }
+
+        private void MostrarIndicadores(ReporteFinanciero r)
+        {
+            _lblKpiVentasVal.Text = TablasReporte.Dinero(r.VentasNetas);
+            _lblKpiVentasSub.Text = r.VentasCanceladas > 0
+                ? $"Excluye {r.VentasCanceladas} cancelada(s) por {TablasReporte.Dinero(r.ImporteCancelado)}"
+                : "Excluye cancelaciones";
+
+            _lblKpiConsumoVal.Text = TablasReporte.Dinero(r.ConsumoTotal);
+            _lblKpiConsumoSub.Text = $"{r.InsumosConsumidos} insumos utilizados";
+
+            _lblKpiExistenciasVal.Text = $"{r.InsumosConExistencia} insumos";
+            _lblKpiExistenciasSub.Text = $"Valorizado en {TablasReporte.Dinero(r.ExistenciasValor)}";
+
+            _lblKpiMermasVal.Text = TablasReporte.Dinero(r.MermasAutorizadasImporte);
+            _lblKpiMermasSub.Text = r.MermasPendientes > 0
+                ? $"{r.MermasAutorizadas} autorizadas · {r.MermasPendientes} pendientes"
+                : $"{r.MermasAutorizadas} registros autorizados";
+        }
+
+        private void MostrarVistaSeleccionada()
+        {
+            if (_reporte == null)
+                return;
+
+            int indice = Math.Max(0, _cmbVista.SelectedIndex);
+            var seccion = Vistas[indice].Seccion;
+            var tabla = seccion.HasValue
+                ? TablasReporte.Detalle(seccion.Value, _reporte)
+                : TablasReporte.Resumen(_reporte);
+
+            LlenarTabla(tabla, esResumen: !seccion.HasValue);
+        }
+
+        // =====================================================================
+        // TABLA
+        // =====================================================================
+
+        private void LlenarTabla(TablaReporte tabla, bool esResumen)
+        {
+            _tablaActual = tabla;
+            _lblTablaTitulo.Text = tabla.Titulo;
+
+            _dgvReporte.SuspendLayout();
+            _dgvReporte.Rows.Clear();
+            _dgvReporte.Columns.Clear();
+
+            for (int i = 0; i < tabla.Columnas.Count; i++)
+            {
+                var c = tabla.Columnas[i];
+                var col = new DataGridViewTextBoxColumn
+                {
+                    Name = $"col{i}",
+                    HeaderText = c.Titulo.ToUpperInvariant(),
+                    FillWeight = c.Peso,
+                    SortMode = DataGridViewColumnSortMode.NotSortable
+                };
+                if (c.AlinearDerecha)
+                {
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                    col.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
+                }
+                _dgvReporte.Columns.Add(col);
+            }
+
+            if (esResumen)
+            {
+                _dgvReporte.Columns.Add(new DataGridViewLinkColumn
+                {
+                    Name = "colAccion",
+                    HeaderText = "ACCIÓN",
+                    Text = "Descargar PDF",
+                    UseColumnTextForLinkValue = true,
+                    LinkColor = ColorTranslator.FromHtml("#1E64D8"),
+                    ActiveLinkColor = TemaCafeteria.CafePrimario,
+                    TrackVisitedState = false,
+                    FillWeight = 11,
+                    SortMode = DataGridViewColumnSortMode.NotSortable
+                });
+            }
+
+            foreach (var fila in tabla.Filas)
+                _dgvReporte.Rows.Add(fila);
+
+            if (tabla.Filas.Count > 0 && tabla.Totales != null)
+            {
+                int idx = _dgvReporte.Rows.Add(tabla.Totales);
+                var filaTotal = _dgvReporte.Rows[idx];
+                filaTotal.Tag = "total";
+                filaTotal.DefaultCellStyle.BackColor = ColorTranslator.FromHtml("#EFE6DC");
+                filaTotal.DefaultCellStyle.SelectionBackColor = ColorTranslator.FromHtml("#EFE6DC");
+                filaTotal.DefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+            }
+
+            _dgvReporte.RowTemplate.Height = esResumen ? 50 : 36;
+            foreach (DataGridViewRow r in _dgvReporte.Rows)
+                r.Height = esResumen ? 50 : 36;
+
+            _dgvReporte.ResumeLayout();
+            _dgvReporte.ClearSelection();
+
+            _lblPieTabla.Text = tabla.Filas.Count == 0
+                ? "Sin registros en el periodo seleccionado."
+                : esResumen
+                    ? $"{tabla.Descripcion}   ·   Haz clic en una categoría para ver su detalle."
+                    : $"{tabla.Descripcion}   ·   {tabla.Filas.Count} registro(s).";
+        }
+
+        // =====================================================================
+        // EXPORTACIÓN A PDF (RIU-06)
+        // =====================================================================
+
+        private void ExportarReporteAPdf(SeccionReporte? soloSeccion)
+        {
+            if (_reporte == null)
+            {
+                MessageBox.Show("Primero genera el reporte del periodo.", "Sin datos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string nombreSugerido = soloSeccion == null
+                ? $"Reporte_Financiero_{_reporte.Desde:yyyyMMdd}_{_reporte.Hasta:yyyyMMdd}.pdf"
+                : $"Reporte_{TablasReporte.NombreSeccion(soloSeccion.Value).Replace(" ", "_")}_{_reporte.Desde:yyyyMMdd}_{_reporte.Hasta:yyyyMMdd}.pdf";
+
+            using SaveFileDialog sfd = new SaveFileDialog
+            {
+                Filter = "Archivo PDF (*.pdf)|*.pdf",
+                FileName = nombreSugerido,
+                Title = "Guardar reporte financiero en PDF"
+            };
+
+            if (sfd.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                var secciones = soloSeccion == null ? null : new List<SeccionReporte> { soloSeccion.Value };
+                bool listo = GeneradorPdfReporte.Exportar(_reporte, sfd.FileName, secciones);
+                Cursor = Cursors.Default;
+
+                if (!listo)
+                {
+                    MessageBox.Show(
+                        $"Windows todavía está escribiendo el archivo:\n{sfd.FileName}\n\nRevisa la carpeta en unos segundos.",
+                        "Exportación en proceso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var resp = MessageBox.Show(
+                    $"El reporte PDF se generó correctamente en:\n{sfd.FileName}\n\n¿Deseas abrir el documento ahora?",
+                    "Exportación PDF exitosa",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+
+                if (resp == DialogResult.Yes && File.Exists(sfd.FileName))
+                    Process.Start(new ProcessStartInfo(sfd.FileName) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                Cursor = Cursors.Default;
+                MessageBox.Show($"No se pudo generar el PDF:\n{ex.Message}", "Error al exportar PDF", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // =====================================================================
+        // INTERFAZ
+        // =====================================================================
 
         private void ConfigurarInterfaz()
         {
@@ -107,7 +328,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _pnlTopBar.Controls.AddRange(new Control[] { _lblRuta, _lblTitulo, _lblSubtitulo });
 
-            // 2. Tarjeta de selección de fechas (FECHA INICIAL | FECHA FINAL | Generar)
+            // 2. Tarjeta de selección de fechas
             _cardFiltroFechas = new PanelRedondeado
             {
                 Size = new Size(540, 74),
@@ -130,7 +351,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 9.5F),
                 Location = new Point(20, 32),
                 Width = 165,
-                Value = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1)
+                Value = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1)
             };
 
             Label lblFecFin = new Label
@@ -148,7 +369,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 9.5F),
                 Location = new Point(205, 32),
                 Width = 165,
-                Value = DateTime.Now
+                Value = DateTime.Today
             };
 
             _btnGenerar = new Button
@@ -165,64 +386,36 @@ namespace CapaPresentaciòn.Controles.Admin
             _btnGenerar.FlatAppearance.BorderSize = 0;
             _btnGenerar.Click += (s, e) =>
             {
+                // RIU-06: rango inválido → mensaje de error y no se consulta
                 if (_dtpFechaInicial.Value.Date > _dtpFechaFinal.Value.Date)
                 {
                     MessageBox.Show("La fecha inicial no puede ser mayor a la fecha final.", "Rango inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
-                CargarDatosPeriodo();
-                MessageBox.Show(
-                    $"Reporte actualizado para el periodo del {_dtpFechaInicial.Value:dd/MM/yyyy} al {_dtpFechaFinal.Value:dd/MM/yyyy}.",
-                    "Periodo Generado",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
+                GenerarReporte(mostrarErrores: true);
             };
 
             _cardFiltroFechas.Controls.AddRange(new Control[] { lblFecIni, _dtpFechaInicial, lblFecFin, _dtpFechaFinal, _btnGenerar });
 
+            _lblEstadoPeriodo = new Label
+            {
+                Text = "Generando reporte…",
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular),
+                ForeColor = TemaCafeteria.TextoSecundario,
+                AutoSize = true
+            };
+
             // 3. Las 4 tarjetas KPI superiores
-            _cardKpiVentas = CrearTarjetaKpi(
-                "Ventas netas",
-                "$45,820.00",
-                "Excluye cancelaciones",
-                TemaCafeteria.TextoOscuro,
-                ColorTranslator.FromHtml("#1F4E35"),
-                out _lblKpiVentasVal,
-                out _
-            );
+            _cardKpiVentas = CrearTarjetaKpi("Ventas netas", TemaCafeteria.TextoOscuro, ColorTranslator.FromHtml("#1F4E35"),
+                out _lblKpiVentasVal, out _lblKpiVentasSub);
+            _cardKpiConsumo = CrearTarjetaKpi("Consumo real", TemaCafeteria.TextoOscuro, TemaCafeteria.TextoSecundario,
+                out _lblKpiConsumoVal, out _lblKpiConsumoSub);
+            _cardKpiExistencias = CrearTarjetaKpi("Existencias al cierre", TemaCafeteria.TextoOscuro, TemaCafeteria.TextoSecundario,
+                out _lblKpiExistenciasVal, out _lblKpiExistenciasSub);
+            _cardKpiMermas = CrearTarjetaKpi("Mermas y pérdidas", ColorTranslator.FromHtml("#B26A00"), ColorTranslator.FromHtml("#B26A00"),
+                out _lblKpiMermasVal, out _lblKpiMermasSub);
 
-            _cardKpiConsumo = CrearTarjetaKpi(
-                "Consumo real",
-                "$18,450.00",
-                "Ingredientes utilizados",
-                TemaCafeteria.TextoOscuro,
-                TemaCafeteria.TextoSecundario,
-                out _lblKpiConsumoVal,
-                out _
-            );
-
-            _cardKpiExistencias = CrearTarjetaKpi(
-                "Existencias actuales",
-                "27 Insumos",
-                "Valorizado en $89,120.00",
-                TemaCafeteria.TextoOscuro,
-                TemaCafeteria.TextoSecundario,
-                out _lblKpiExistenciasVal,
-                out _lblKpiExistenciasSub
-            );
-
-            _cardKpiMermas = CrearTarjetaKpi(
-                "Mermas y pérdidas",
-                "$2,418.00",
-                "5 registros autorizados",
-                ColorTranslator.FromHtml("#B26A00"),
-                ColorTranslator.FromHtml("#B26A00"),
-                out _lblKpiMermasVal,
-                out _
-            );
-
-            // 4. Tarjeta inferior con tabla consolidada y botón Exportar reporte completo a PDF
+            // 4. Tarjeta inferior con tabla y exportación a PDF
             _cardTabla = new PanelRedondeado
             {
                 RadioBorde = 16,
@@ -238,26 +431,55 @@ namespace CapaPresentaciòn.Controles.Admin
                 AutoSize = true
             };
 
+            _lblVer = new Label
+            {
+                Text = "Ver:",
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                ForeColor = TemaCafeteria.TextoSecundario,
+                AutoSize = true
+            };
+
+            _cmbVista = new ComboBox
+            {
+                Font = new Font("Segoe UI", 9.5F),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 215
+            };
+            foreach (var v in Vistas)
+                _cmbVista.Items.Add(v.Texto);
+            _cmbVista.SelectedIndex = 0;
+            _cmbVista.SelectedIndexChanged += (s, e) => MostrarVistaSeleccionada();
+
             _btnExportarTodoPdf = new Button
             {
-                Text = "Exportar a PDF",
+                Text = "Exportar reporte completo a PDF",
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 ForeColor = Color.White,
                 BackColor = ColorTranslator.FromHtml("#1F242D"),
                 FlatStyle = FlatStyle.Flat,
-                Size = new Size(245, 38),
-                Cursor = Cursors.Hand
+                Size = new Size(255, 36),
+                Cursor = Cursors.Hand,
+                Enabled = false
             };
             _btnExportarTodoPdf.FlatAppearance.BorderSize = 0;
-            _btnExportarTodoPdf.Click += (s, e) => ExportarReporteAPdf(soloUnaFila: null);
+            _btnExportarTodoPdf.Click += (s, e) => ExportarReporteAPdf(soloSeccion: null);
 
             ConfigurarTablaReporte();
 
-            _cardTabla.Controls.AddRange(new Control[] { _lblTablaTitulo, _btnExportarTodoPdf, _dgvReporte });
+            _lblPieTabla = new Label
+            {
+                Text = string.Empty,
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
+                ForeColor = TemaCafeteria.TextoSecundario,
+                AutoSize = false,
+                AutoEllipsis = true
+            };
+
+            _cardTabla.Controls.AddRange(new Control[] { _lblTablaTitulo, _lblVer, _cmbVista, _btnExportarTodoPdf, _dgvReporte, _lblPieTabla });
 
             Controls.AddRange(new Control[]
             {
-                _cardFiltroFechas,
+                _cardFiltroFechas, _lblEstadoPeriodo,
                 _cardKpiVentas, _cardKpiConsumo, _cardKpiExistencias, _cardKpiMermas,
                 _cardTabla,
                 _pnlTopBar
@@ -268,14 +490,7 @@ namespace CapaPresentaciòn.Controles.Admin
             AjustarLayoutResponsivo();
         }
 
-        private PanelRedondeado CrearTarjetaKpi(
-            string titulo,
-            string valorInicial,
-            string subtexto,
-            Color colorValor,
-            Color colorSubtexto,
-            out Label lblValor,
-            out Label lblSub)
+        private PanelRedondeado CrearTarjetaKpi(string titulo, Color colorValor, Color colorSubtexto, out Label lblValor, out Label lblSub)
         {
             PanelRedondeado card = new PanelRedondeado
             {
@@ -294,7 +509,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             lblValor = new Label
             {
-                Text = valorInicial,
+                Text = "—",
                 Font = new Font("Segoe UI", 17.5F, FontStyle.Bold),
                 ForeColor = colorValor,
                 Location = new Point(16, 42),
@@ -303,7 +518,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             lblSub = new Label
             {
-                Text = subtexto,
+                Text = string.Empty,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
                 ForeColor = colorSubtexto,
                 Location = new Point(18, 82),
@@ -328,8 +543,8 @@ namespace CapaPresentaciòn.Controles.Admin
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 MultiSelect = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                ColumnHeadersHeight = 44,
-                RowTemplate = { Height = 54 },
+                ColumnHeadersHeight = 40,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
                 EnableHeadersVisualStyles = false,
                 GridColor = TemaCafeteria.BordeSuave,
                 CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal
@@ -341,7 +556,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
                 Alignment = DataGridViewContentAlignment.MiddleLeft,
-                Padding = new Padding(12, 0, 12, 0)
+                Padding = new Padding(8, 0, 8, 0)
             };
 
             _dgvReporte.DefaultCellStyle = new DataGridViewCellStyle
@@ -351,46 +566,29 @@ namespace CapaPresentaciòn.Controles.Admin
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 SelectionBackColor = ColorTranslator.FromHtml("#FAF6F1"),
                 SelectionForeColor = TemaCafeteria.TextoOscuro,
-                Padding = new Padding(12, 0, 12, 0)
+                Padding = new Padding(8, 0, 8, 0)
             };
-
-            _dgvReporte.Columns.Add(new DataGridViewTextBoxColumn { Name = "colCat", HeaderText = "CATEGORÍA DE REPORTE", FillWeight = 22 });
-            _dgvReporte.Columns.Add(new DataGridViewTextBoxColumn { Name = "colDesc", HeaderText = "DESCRIPCIÓN", FillWeight = 32 });
-            _dgvReporte.Columns.Add(new DataGridViewTextBoxColumn { Name = "colVol", HeaderText = "VOLUMEN / UNIDADES", FillWeight = 16 });
-            _dgvReporte.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTotal", HeaderText = "COSTO / VALOR TOTAL", FillWeight = 16 });
-            _dgvReporte.Columns.Add(new DataGridViewTextBoxColumn { Name = "colEstado", HeaderText = "ESTADO", FillWeight = 13 });
-
-            var colAccion = new DataGridViewLinkColumn
-            {
-                Name = "colAccion",
-                HeaderText = "ACCIÓN",
-                Text = "Descargar PDF",
-                UseColumnTextForLinkValue = true,
-                LinkColor = ColorTranslator.FromHtml("#1E64D8"),
-                ActiveLinkColor = TemaCafeteria.CafePrimario,
-                TrackVisitedState = false,
-                FillWeight = 14
-            };
-            _dgvReporte.Columns.Add(colAccion);
 
             _dgvReporte.CellFormatting += (s, e) =>
             {
-                if (e.RowIndex < 0) return;
+                if (e.RowIndex < 0 || _tablaActual == null || e.CellStyle == null)
+                    return;
+                if (_dgvReporte.Rows[e.RowIndex].Tag as string == "total")
+                    return;
 
-                if (e.ColumnIndex == _dgvReporte.Columns["colCat"]!.Index ||
-                    e.ColumnIndex == _dgvReporte.Columns["colTotal"]!.Index)
-                {
-                    e.CellStyle!.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
-                }
+                if (e.ColumnIndex == 0)
+                    e.CellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
 
-                if (e.ColumnIndex == _dgvReporte.Columns["colEstado"]!.Index)
+                if (e.ColumnIndex == _tablaActual.ColumnaEstado)
                 {
-                    string est = e.Value?.ToString() ?? "";
-                    e.CellStyle!.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+                    string est = e.Value?.ToString() ?? string.Empty;
+                    e.CellStyle.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
                     e.CellStyle.ForeColor = est switch
                     {
-                        "Autorizado" => ColorTranslator.FromHtml("#B26A00"),
+                        "Cancelada" or "Rechazada" or "Rojo" => ColorTranslator.FromHtml("#C62828"),
+                        "Pendiente" or "Amarillo" or "Autorizado" => ColorTranslator.FromHtml("#B26A00"),
                         "Actualizado" => ColorTranslator.FromHtml("#1E64D8"),
+                        "Blanco" => TemaCafeteria.TextoSecundario,
                         _ => ColorTranslator.FromHtml("#1F4E35")
                     };
                 }
@@ -398,186 +596,25 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _dgvReporte.CellContentClick += (s, e) =>
             {
-                if (e.RowIndex >= 0 && e.ColumnIndex == _dgvReporte.Columns["colAccion"]!.Index)
-                {
-                    if (e.RowIndex < _filasReporte.Count)
-                    {
-                        ExportarReporteAPdf(_filasReporte[e.RowIndex]);
-                    }
-                }
-            };
-        }
+                if (e.RowIndex < 0 || _cmbVista.SelectedIndex != 0)
+                    return;
 
-        private void CargarDatosPeriodo()
-        {
-            _filasReporte.Clear();
-
-            int dias = Math.Max(1, (_dtpFechaFinal.Value.Date - _dtpFechaInicial.Value.Date).Days + 1);
-            decimal factorPeriodo = Math.Round(dias / 15m, 2);
-            if (factorPeriodo <= 0) factorPeriodo = 1m;
-
-            decimal ventasNetas = Math.Round(45820.00m * factorPeriodo, 2);
-            decimal consumoReal = Math.Round(18450.00m * factorPeriodo, 2);
-            decimal existenciasVal = 89120.00m;
-            decimal mermasVal = Math.Round(2418.00m * factorPeriodo, 2);
-            int tickets = Math.Max(12, (int)(1420 * factorPeriodo));
-
-            _lblKpiVentasVal.Text = ventasNetas.ToString("C2", _culturaMxn);
-            _lblKpiConsumoVal.Text = consumoReal.ToString("C2", _culturaMxn);
-            _lblKpiExistenciasVal.Text = "27 Insumos";
-            _lblKpiExistenciasSub.Text = $"Valorizado en {existenciasVal.ToString("C2", _culturaMxn)}";
-            _lblKpiMermasVal.Text = mermasVal.ToString("C2", _culturaMxn);
-
-            _filasReporte.AddRange(new[]
-            {
-                new FilaReporteFinanciero(
-                    "Ventas netas",
-                    "Ingresos totales descontando cancelaciones de caja",
-                    $"{tickets:N0} tickets",
-                    ventasNetas,
-                    "Verificado"
-                ),
-                new FilaReporteFinanciero(
-                    "Consumo real de ingredientes",
-                    "Café, lácteos, jarabes y panadería descontados por recetas",
-                    $"{Math.Round(350 * factorPeriodo, 0):N0} kg / L total",
-                    consumoReal,
-                    "Calculado"
-                ),
-                new FilaReporteFinanciero(
-                    "Existencias actuales",
-                    "Inventario físico valorizado PEPS al cierre de periodo",
-                    "27 insumos activos",
-                    existenciasVal,
-                    "Actualizado"
-                ),
-                new FilaReporteFinanciero(
-                    "Mermas y pérdidas",
-                    "Total de mermas autorizadas por supervisión",
-                    "5 solicitudes",
-                    mermasVal,
-                    "Autorizado"
-                )
-            });
-
-            _dgvReporte.Rows.Clear();
-            foreach (var f in _filasReporte)
-            {
-                _dgvReporte.Rows.Add(
-                    f.Categoria,
-                    f.Descripcion,
-                    f.VolumenUnidades,
-                    f.CostoValorTotal.ToString("C2", _culturaMxn),
-                    f.Estado,
-                    "Descargar PDF"
-                );
-            }
-        }
-
-        private void ExportarReporteAPdf(FilaReporteFinanciero? soloUnaFila)
-        {
-            string nombreSugerido = soloUnaFila == null
-                ? $"Reporte_Financiero_Completo_{_dtpFechaInicial.Value:yyyyMMdd}_{_dtpFechaFinal.Value:yyyyMMdd}.pdf"
-                : $"Reporte_{soloUnaFila.Categoria.Replace(" ", "_")}_{DateTime.Now:yyyyMMdd}.pdf";
-
-            using SaveFileDialog sfd = new SaveFileDialog
-            {
-                Filter = "Archivo PDF (*.pdf)|*.pdf",
-                FileName = nombreSugerido,
-                Title = "Guardar reporte financiero en PDF"
+                if (_dgvReporte.Columns[e.ColumnIndex].Name == "colAccion" && e.RowIndex < Vistas.Length - 1)
+                    ExportarReporteAPdf(Vistas[e.RowIndex + 1].Seccion);
             };
 
-            if (sfd.ShowDialog(this) != DialogResult.OK)
-                return;
-
-            try
+            // En el resumen, un clic en la fila abre el detalle de esa categoría
+            _dgvReporte.CellClick += (s, e) =>
             {
-                var filasAImprimir = soloUnaFila == null
-                    ? _filasReporte
-                    : new List<FilaReporteFinanciero> { soloUnaFila };
+                if (e.RowIndex < 0 || _cmbVista.SelectedIndex != 0 || e.RowIndex >= Vistas.Length - 1)
+                    return;
+                if (_dgvReporte.Columns[e.ColumnIndex].Name == "colAccion")
+                    return;
 
-                GenerarArchivoPdfNativo(sfd.FileName, filasAImprimir);
-
-                var resp = MessageBox.Show(
-                    $"El reporte PDF se generó correctamente en:\n{sfd.FileName}\n\n¿Deseas abrir el documento ahora?",
-                    "Exportación PDF Exitosa",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Information
-                );
-
-                if (resp == DialogResult.Yes && File.Exists(sfd.FileName))
-                {
-                    Process.Start(new ProcessStartInfo(sfd.FileName) { UseShellExecute = true });
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    $"No se pudo generar el PDF directamente ({ex.Message}).\nVerifica que la impresora 'Microsoft Print to PDF' esté habilitada en Windows.",
-                    "Error al exportar PDF",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
-            }
-        }
-
-        private void GenerarArchivoPdfNativo(string rutaDestinoPdf, List<FilaReporteFinanciero> filas)
-        {
-            using PrintDocument pd = new PrintDocument();
-            pd.PrinterSettings.PrinterName = "Microsoft Print to PDF";
-            pd.PrinterSettings.PrintToFile = true;
-            pd.PrinterSettings.PrintFileName = rutaDestinoPdf;
-
-            pd.PrintPage += (s, e) =>
-            {
-                Graphics g = e.Graphics!;
-                int x = 55;
-                int y = 60;
-                int anchoPagina = e.MarginBounds.Width;
-
-                using Font fTitulo = new Font("Segoe UI", 18F, FontStyle.Bold);
-                using Font fSub = new Font("Segoe UI", 10F, FontStyle.Regular);
-                using Font fSec = new Font("Segoe UI", 11F, FontStyle.Bold);
-                using Font fCuerpo = new Font("Segoe UI", 9.5F, FontStyle.Regular);
-                using Pen penBorde = new Pen(Color.FromArgb(210, 205, 198), 1);
-
-                g.DrawString("SISTEMA DE GESTIÓN DE CAFETERÍA — SUCURSAL CENTRO", fSec, Brushes.SaddleBrown, x, y);
-                y += 28;
-                g.DrawString("Reporte Financiero y Analítico", fTitulo, Brushes.Black, x, y);
-                y += 34;
-                g.DrawString(
-                    $"Periodo consultado: {_dtpFechaInicial.Value:dd/MM/yyyy} al {_dtpFechaFinal.Value:dd/MM/yyyy}   |   Generado: {DateTime.Now:dd/MM/yyyy HH:mm}",
-                    fSub, Brushes.DimGray, x, y);
-                y += 32;
-                g.DrawLine(penBorde, x, y, x + anchoPagina, y);
-                y += 24;
-
-                // Encabezado de tabla en PDF
-                g.FillRectangle(new SolidBrush(Color.FromArgb(245, 242, 238)), x, y, anchoPagina, 32);
-                g.DrawString("CATEGORÍA", fSec, Brushes.Black, x + 8, y + 7);
-                g.DrawString("VOLUMEN", fSec, Brushes.Black, x + 240, y + 7);
-                g.DrawString("ESTADO", fSec, Brushes.Black, x + 380, y + 7);
-                g.DrawString("TOTAL MXN", fSec, Brushes.Black, x + 490, y + 7);
-                y += 38;
-
-                foreach (var item in filas)
-                {
-                    g.DrawString(item.Categoria, fSec, Brushes.Black, x + 8, y);
-                    g.DrawString(item.VolumenUnidades, fCuerpo, Brushes.Black, x + 240, y);
-                    g.DrawString(item.Estado, fCuerpo, Brushes.DarkGreen, x + 380, y);
-                    g.DrawString(item.CostoValorTotal.ToString("C2", _culturaMxn), fSec, Brushes.Black, x + 490, y);
-                    y += 22;
-                    g.DrawString(item.Descripcion, fSub, Brushes.DimGray, x + 8, y);
-                    y += 24;
-                    g.DrawLine(penBorde, x, y, x + anchoPagina, y);
-                    y += 14;
-                }
-
-                y += 20;
-                g.DrawString("Documento generado automáticamente para control administrativo y auditoría interna.", fSub, Brushes.Gray, x, y);
+                // Se aplaza: reconstruir la tabla dentro de su propio evento de clic provoca una llamada reentrante
+                int vista = e.RowIndex + 1;
+                BeginInvoke(new Action(() => _cmbVista.SelectedIndex = vista));
             };
-
-            pd.Print();
         }
 
         private void AjustarLayoutResponsivo()
@@ -587,9 +624,10 @@ namespace CapaPresentaciòn.Controles.Admin
             int margenX = 32;
             int anchoUtil = Math.Max(820, ClientSize.Width - (margenX * 2));
 
-            // 1. Tarjeta filtro de fechas
+            // 1. Tarjeta filtro de fechas + estado del periodo
             int yFiltro = _pnlTopBar.Height + 16;
             _cardFiltroFechas.Location = new Point(margenX, yFiltro);
+            _lblEstadoPeriodo.Location = new Point(margenX + _cardFiltroFechas.Width + 18, yFiltro + 28);
 
             // 2. Fila de 4 tarjetas KPI
             int yKpi = yFiltro + _cardFiltroFechas.Height + 16;
@@ -602,13 +640,18 @@ namespace CapaPresentaciòn.Controles.Admin
             _cardKpiExistencias.Bounds = new Rectangle(margenX + (anchoKpi + gapKpi) * 2, yKpi, anchoKpi, altoKpi);
             _cardKpiMermas.Bounds = new Rectangle(margenX + (anchoKpi + gapKpi) * 3, yKpi, anchoUtil - ((anchoKpi + gapKpi) * 3), altoKpi);
 
-            // 3. Tarjeta inferior con tabla consolidada
+            // 3. Tarjeta inferior con la tabla
             int yTabla = yKpi + altoKpi + 18;
-            int altoTablaCard = Math.Max(290, ClientSize.Height - yTabla - 22);
+            int altoTablaCard = Math.Max(300, ClientSize.Height - yTabla - 22);
             _cardTabla.Bounds = new Rectangle(margenX, yTabla, anchoUtil, altoTablaCard);
 
             _btnExportarTodoPdf.Location = new Point(anchoUtil - _btnExportarTodoPdf.Width - 22, 14);
-            _dgvReporte.Bounds = new Rectangle(16, 62, anchoUtil - 32, altoTablaCard - 78);
+            _cmbVista.Location = new Point(_btnExportarTodoPdf.Left - _cmbVista.Width - 14, 19);
+            _lblVer.Location = new Point(_cmbVista.Left - _lblVer.Width - 6, 22);
+
+            int altoPie = 30;
+            _dgvReporte.Bounds = new Rectangle(16, 62, anchoUtil - 32, altoTablaCard - 62 - altoPie - 10);
+            _lblPieTabla.Bounds = new Rectangle(20, altoTablaCard - altoPie - 6, anchoUtil - 40, altoPie);
         }
     }
 }

@@ -220,10 +220,29 @@ namespace CapaPresentaciòn.Formularios
             _pnlSidebar.Visible = mostrarSidebar;
             MarcarBotonActivo(botonActivo);
 
+            // Cada pestaña se crea nueva al abrirla (carga existencias frescas de MySQL);
+            // la anterior se libera para no dejarla viva en memoria con sus eventos.
+            var anteriores = new Control[_panelContenido.Controls.Count];
+            _panelContenido.Controls.CopyTo(anteriores, 0);
             _panelContenido.Controls.Clear();
+            LiberarDespues(anteriores);
+
             nuevaVista.Dock = DockStyle.Fill;
             _panelContenido.Controls.Add(nuevaVista);
             nuevaVista.BringToFront();
+        }
+
+        /// <summary>
+        /// Libera las vistas anteriores después de terminar el evento actual: el cambio de pestaña
+        /// puede venir de un botón de la propia vista que se está quitando.
+        /// </summary>
+        private void LiberarDespues(Control[] vistas)
+        {
+            if (vistas.Length == 0) return;
+            if (IsHandleCreated)
+                BeginInvoke(new Action(() => { foreach (var v in vistas) v.Dispose(); }));
+            else
+                foreach (var v in vistas) v.Dispose();
         }
 
         public void MostrarDashboardAdmin()

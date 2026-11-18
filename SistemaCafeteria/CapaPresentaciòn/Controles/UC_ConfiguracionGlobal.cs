@@ -358,9 +358,9 @@ namespace CapaPresentaciòn.Controles.Admin
                 return;
             }
 
-            if (!decimal.TryParse(_txtLimiteMerma.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal nuevoLimite) || nuevoLimite < 0)
+            if (!EntradaNumerica.TryLeerImporte(_txtLimiteMerma.Text, out decimal nuevoLimite, out string errorLimite))
             {
-                MessageBox.Show("Ingresa un monto económico válido en MXN para el límite de mermas.", "Monto inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show($"Límite económico de mermas: {errorLimite}", "Monto inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 _txtLimiteMerma.Focus();
                 return;
             }

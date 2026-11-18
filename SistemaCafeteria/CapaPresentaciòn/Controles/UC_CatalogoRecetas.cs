@@ -547,7 +547,7 @@ namespace CapaPresentaciòn.Controles.Admin
             if (_dgvProductos == null)
                 return;
 
-            string texto = _txtBuscarProd.Text.Trim().ToLowerInvariant();
+            string texto = Busqueda.Normalizar(_txtBuscarProd.Text);
             string cat = _cmbFiltroCat.SelectedItem?.ToString() ?? TodasLasCategorias;
 
             _suprimirSeleccion = true;
@@ -561,13 +561,8 @@ namespace CapaPresentaciòn.Controles.Admin
 
                 string codigo = p.CodigoBarras ?? string.Empty;
 
-                if (!string.IsNullOrEmpty(texto))
-                {
-                    bool coincideNombre = p.Nombre.ToLowerInvariant().Contains(texto);
-                    bool coincideCodigo = codigo.ToLowerInvariant().Contains(texto);
-                    if (!coincideNombre && !coincideCodigo)
-                        continue;
-                }
+                if (!Busqueda.Coincide(texto, p.Nombre, codigo))
+                    continue;
 
                 string estado = p.Estado != "Activo"
                     ? "Inactivo"
@@ -764,7 +759,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 );
             }
 
-            decimal precio = TryParseDecimal(_txtPrecioProd.Text, out decimal p) ? p : 0m;
+            decimal precio = EntradaNumerica.LeerImporteOCero(_txtPrecioProd.Text);
             decimal utilidad = precio - costoTotal;
             decimal margen = precio > 0 ? (utilidad / precio) * 100m : 0m;
 
@@ -795,7 +790,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 factor = CatalogoNegocio.FactorConversion(unidadReceta, unidadInsumo);
             }
 
-            return Math.Round(linea.Cantidad * factor * costoReferencia, 2);
+            return Ent.Redondeo.Importe(linea.Cantidad * factor * costoReferencia);
         }
 
         private void BtnAgregarInsumo_Click(object? sender, EventArgs e)
@@ -806,9 +801,12 @@ namespace CapaPresentaciòn.Controles.Admin
                 return;
             }
 
-            if (!TryParseDecimal(_txtCantidadInsumo.Text, out decimal cantidad) || cantidad <= 0)
+            if (!EntradaNumerica.TryLeerCantidad(_txtCantidadInsumo.Text, out decimal cantidad, out string errorCantidad) || cantidad <= 0)
             {
-                MessageBox.Show("Ingresa una cantidad válida mayor a cero (por ejemplo: 0.020).", "Cantidad inválida", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                string mensaje = errorCantidad.Length > 0
+                    ? errorCantidad
+                    : "Ingresa una cantidad mayor a cero (por ejemplo: 0.020).";
+                MessageBox.Show(mensaje, "Cantidad inválida", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -822,7 +820,7 @@ namespace CapaPresentaciòn.Controles.Admin
                 {
                     factor = CatalogoNegocio.FactorConversion(uInsumo, uExistente);
                 }
-                existente.Cantidad += cantidad * factor;
+                existente.Cantidad = Ent.Redondeo.Cantidad(existente.Cantidad + cantidad * factor);
             }
             else
             {
@@ -854,9 +852,12 @@ namespace CapaPresentaciòn.Controles.Admin
         {
             string nombre = _txtNombreProd.Text.Trim();
 
-            if (!TryParseDecimal(_txtPrecioProd.Text, out decimal precio) || precio <= 0)
+            if (!EntradaNumerica.TryLeerImporte(_txtPrecioProd.Text, out decimal precio, out string errorPrecio) || precio <= 0)
             {
-                MessageBox.Show("Ingresa un precio de venta válido.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                string mensaje = errorPrecio.Length > 0
+                    ? $"Precio de venta: {errorPrecio}"
+                    : "El precio de venta debe ser mayor a cero.";
+                MessageBox.Show(mensaje, "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -984,12 +985,6 @@ namespace CapaPresentaciòn.Controles.Admin
         // =====================================================================
         // AUXILIARES
         // =====================================================================
-
-        /// <summary>Acepta tanto "0.020" como "0,020".</summary>
-        private static bool TryParseDecimal(string texto, out decimal valor)
-        {
-            return decimal.TryParse(texto.Trim().Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out valor);
-        }
 
         private void AjustarLayoutResponsivo()
         {

@@ -32,6 +32,7 @@ namespace CapaPresentaciòn.Controles.Admin
         // Columna izquierda: Buscador + Resultados de ventas
         private PanelRedondeado _cardBusqueda = null!;
         private TextBox _txtBuscarFolio = null!;
+        private ComboBox _cmbFiltroEstado = null!;
         private Button _btnBuscar = null!;
 
         private PanelRedondeado _cardResultados = null!;
@@ -184,7 +185,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblBuscarTit = new Label
             {
-                Text = "Buscar venta por folio o cajero",
+                Text = "Buscar venta por folio, cajero o método de pago",
                 Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(20, 14),
@@ -200,6 +201,18 @@ namespace CapaPresentaciòn.Controles.Admin
             };
             _txtBuscarFolio.TextChanged += (s, e) => FiltrarVentas();
 
+            // RIU-10: filtro rápido por estado de la venta
+            _cmbFiltroEstado = new ComboBox
+            {
+                Font = new Font("Segoe UI", 10F),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 140,
+                Location = new Point(20, 42)
+            };
+            _cmbFiltroEstado.Items.AddRange(new object[] { "Todas", "Confirmadas", "Canceladas" });
+            _cmbFiltroEstado.SelectedIndex = 0;
+            _cmbFiltroEstado.SelectedIndexChanged += (s, e) => FiltrarVentas();
+
             _btnBuscar = new Button
             {
                 Text = "Actualizar",
@@ -213,7 +226,7 @@ namespace CapaPresentaciòn.Controles.Admin
             _btnBuscar.FlatAppearance.BorderSize = 0;
             _btnBuscar.Click += (s, e) => CargarVentas();
 
-            _cardBusqueda.Controls.AddRange(new Control[] { lblBuscarTit, _txtBuscarFolio, _btnBuscar });
+            _cardBusqueda.Controls.AddRange(new Control[] { lblBuscarTit, _txtBuscarFolio, _cmbFiltroEstado, _btnBuscar });
 
             // Tarjeta inferior izquierda: Resultados de ventas
             _cardResultados = new PanelRedondeado
@@ -524,7 +537,13 @@ namespace CapaPresentaciòn.Controles.Admin
             if (_dgvVentas == null)
                 return;
 
-            string filtro = _txtBuscarFolio.Text.Trim().ToLowerInvariant();
+            string filtro = Busqueda.Normalizar(_txtBuscarFolio.Text);
+            string? estadoFiltro = _cmbFiltroEstado?.SelectedIndex switch
+            {
+                1 => "Confirmada",
+                2 => "Cancelada",
+                _ => null
+            };
 
             _suprimirSeleccion = true;
             _dgvVentas.Rows.Clear();
@@ -532,9 +551,10 @@ namespace CapaPresentaciòn.Controles.Admin
 
             foreach (var v in _ventas)
             {
-                if (!string.IsNullOrEmpty(filtro)
-                    && !v.Folio.ToLowerInvariant().Contains(filtro)
-                    && !v.NombreCajero.ToLowerInvariant().Contains(filtro))
+                if (estadoFiltro != null && v.Estado != estadoFiltro)
+                    continue;
+
+                if (!Busqueda.Coincide(filtro, v.Folio, v.NombreCajero, v.MetodoPago))
                     continue;
 
                 string textoAccion = v.Estado == "Confirmada" ? "Cancelar" : "Sin acciones";
@@ -837,7 +857,8 @@ namespace CapaPresentaciòn.Controles.Admin
             int altoBusqueda = 96;
             _cardBusqueda.Bounds = new Rectangle(margenX, topContenido, anchoIzq, altoBusqueda);
             _btnBuscar.Location = new Point(anchoIzq - _btnBuscar.Width - 20, 40);
-            _txtBuscarFolio.Width = _btnBuscar.Left - 32;
+            _cmbFiltroEstado.Location = new Point(_btnBuscar.Left - _cmbFiltroEstado.Width - 10, 42);
+            _txtBuscarFolio.Width = _cmbFiltroEstado.Left - 30;
 
             int yResultados = topContenido + altoBusqueda + 14;
             int altoResultados = altoDisponible - altoBusqueda - 14;

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using CapaEntidades;
-using MySqlConnector;
+using MySql.Data.MySqlClient;
 
 namespace CapaDatos
 {

@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
+using System.Globalization;
 using System.Windows.Forms;
+using CapaLogica;
 using CapaPresentacion.Estilos;
 
 namespace CapaPresentaciòn.Controles.Admin
@@ -30,6 +33,12 @@ namespace CapaPresentaciòn.Controles.Admin
         private PanelRedondeado _cardVentas = null!;
         private PanelRedondeado _cardFinanciero = null!;
         private PanelRedondeado _cardAlertas = null!;
+        private Label _lblVentasVal = null!;
+        private Label _lblVentasSub = null!;
+        private Label _lblFinancieroVal = null!;
+        private Label _lblFinancieroSub = null!;
+        private Label _lblAlertasVal = null!;
+        private Label _lblAlertasSub = null!;
 
         // Tarjetas de los 6 módulos administrativos
         private readonly List<PanelRedondeado> _tarjetasMenu = new();
@@ -37,8 +46,55 @@ namespace CapaPresentaciòn.Controles.Admin
 
         public UC_MenuAdmin()
         {
-
             ConfigurarInterfaz();
+
+            Load += (s, e) =>
+            {
+                if (LicenseManager.UsageMode == LicenseUsageMode.Designtime || DesignMode)
+                    return;
+
+                CargarIndicadores();
+            };
+        }
+
+        /// <summary>Indicadores reales del día y del inventario (ReporteNegocio).</summary>
+        private void CargarIndicadores()
+        {
+            var cultura = CultureInfo.GetCultureInfo("es-MX");
+            var resultado = new ReporteNegocio().ObtenerResumenDashboard();
+
+            if (!resultado.Exito || resultado.Resumen == null)
+            {
+                foreach (var lbl in new[] { _lblVentasVal, _lblFinancieroVal, _lblAlertasVal })
+                    lbl.Text = "—";
+                _lblVentasSub.Text = _lblFinancieroSub.Text = _lblAlertasSub.Text = "No se pudo consultar MySQL";
+                AjustarLayoutResponsivo();
+                return;
+            }
+
+            var r = resultado.Resumen;
+
+            _lblVentasVal.Text = r.VentasHoy.ToString("C2", cultura);
+            _lblVentasSub.Text = $"{r.TicketsHoy} {(r.TicketsHoy == 1 ? "venta confirmada" : "ventas confirmadas")} hoy";
+
+            if (r.TicketsHoy == 0 && r.UtilidadBrutaHoy == 0)
+            {
+                _lblFinancieroVal.Text = "Sin movimientos";
+                _lblFinancieroVal.ForeColor = TemaCafeteria.TextoSecundario;
+            }
+            else
+            {
+                bool positivo = r.UtilidadBrutaHoy >= 0;
+                _lblFinancieroVal.Text = positivo ? "Balance Positivo" : "Balance Negativo";
+                _lblFinancieroVal.ForeColor = positivo ? ColorTranslator.FromHtml("#0D47A1") : ColorTranslator.FromHtml("#C62828");
+            }
+            _lblFinancieroSub.Text = $"Utilidad bruta hoy: {r.UtilidadBrutaHoy.ToString("C2", cultura)}";
+
+            _lblAlertasVal.Text = $"{r.AlertasInventario} {(r.AlertasInventario == 1 ? "insumo" : "insumos")}";
+            _lblAlertasSub.Text = $"{r.InsumosBlanco} agotados · {r.InsumosRojo} en rojo · {r.InsumosAmarillo} en amarillo"
+                                  + (r.MermasPendientes > 0 ? $" · {r.MermasPendientes} mermas por autorizar" : string.Empty);
+
+            AjustarLayoutResponsivo();
         }
 
         private void ConfigurarInterfaz()
@@ -98,24 +154,27 @@ namespace CapaPresentaciòn.Controles.Admin
             // 3. Tarjetas KPI Superiores
             _cardVentas = CrearTarjetaKpi(
                 "VENTAS DEL DÍA",
-                "$7,256.25",
-                "Ingresos acumulados en caja",
+                "—",
+                "Ventas netas (excluye canceladas)",
                 ColorTranslator.FromHtml("#1F4E35"),
-                ColorTranslator.FromHtml("#EAF3EE"));
+                ColorTranslator.FromHtml("#EAF3EE"),
+                out _lblVentasVal, out _lblVentasSub);
 
             _cardFinanciero = CrearTarjetaKpi(
                 "ESTADO FINANCIERO",
-                "Balance Positivo",
-                "Margen operativo saludable",
+                "—",
+                "Utilidad bruta del día",
                 ColorTranslator.FromHtml("#0D47A1"),
-                ColorTranslator.FromHtml("#E3F2FD"));
+                ColorTranslator.FromHtml("#E3F2FD"),
+                out _lblFinancieroVal, out _lblFinancieroSub);
 
             _cardAlertas = CrearTarjetaKpi(
                 "ALERTAS DE INVENTARIO",
-                "3 insumos",
-                "Requieren atención o reabasto",
+                "—",
+                "Insumos que requieren reabastecimiento",
                 ColorTranslator.FromHtml("#C62828"),
-                ColorTranslator.FromHtml("#FFEBEE"));
+                ColorTranslator.FromHtml("#FFEBEE"),
+                out _lblAlertasVal, out _lblAlertasSub);
 
             _pnlContenido.Controls.AddRange(new Control[] { _cardVentas, _cardFinanciero, _cardAlertas });
 
@@ -161,7 +220,8 @@ namespace CapaPresentaciòn.Controles.Admin
             AjustarLayoutResponsivo();
         }
 
-        private PanelRedondeado CrearTarjetaKpi(string etiqueta, string valor, string subtexto, Color colorAcento, Color colorBadge)
+        private PanelRedondeado CrearTarjetaKpi(string etiqueta, string valor, string subtexto, Color colorAcento, Color colorBadge,
+            out Label lblValor, out Label lblSubtexto)
         {
             PanelRedondeado card = new PanelRedondeado
             {
@@ -199,6 +259,8 @@ namespace CapaPresentaciòn.Controles.Admin
             };
 
             card.Controls.AddRange(new Control[] { lblBadge, lblVal, lblSub });
+            lblValor = lblVal;
+            lblSubtexto = lblSub;
             return card;
         }
 

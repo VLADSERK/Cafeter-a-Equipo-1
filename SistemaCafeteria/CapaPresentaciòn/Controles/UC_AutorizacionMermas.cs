@@ -176,15 +176,8 @@ namespace CapaPresentaciòn.Controles.Admin
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Width = 230
             };
-            _cmbFiltroMotivo.Items.AddRange(new object[]
-            {
-                "Todos los motivos",
-                "Caducidad vencida",
-                "Derrame o accidente en barra",
-                "Producto dañado en almacén",
-                "Error de preparación en receta",
-                "Mal estado / Calidad no óptima"
-            });
+            _cmbFiltroMotivo.Items.Add("Todos los motivos");
+            _cmbFiltroMotivo.Items.AddRange(MermaNegocio.Motivos);
             _cmbFiltroMotivo.SelectedIndex = 0;
             _cmbFiltroMotivo.SelectedIndexChanged += (s, e) => ActualizarTablaYContadores();
 
@@ -322,7 +315,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
         private void ActualizarTablaYContadores()
         {
-            string busqueda = _txtBuscar.Text.Trim().ToLowerInvariant();
+            string busqueda = Busqueda.Normalizar(_txtBuscar.Text);
             string motivoFiltro = _cmbFiltroMotivo.SelectedItem?.ToString() ?? "Todos los motivos";
 
             _dgvSolicitudes.Rows.Clear();
@@ -333,17 +326,13 @@ namespace CapaPresentaciòn.Controles.Admin
                 if (motivoFiltro != "Todos los motivos" && sol.Motivo != motivoFiltro)
                     continue;
 
-                if (!string.IsNullOrEmpty(busqueda))
-                {
-                    bool coincide = sol.NombreInsumo.ToLowerInvariant().Contains(busqueda) ||
-                                    sol.CodigoLote.ToLowerInvariant().Contains(busqueda);
-                    if (!coincide) continue;
-                }
+                if (!Busqueda.Coincide(busqueda, sol.NombreInsumo, sol.CodigoLote, sol.NombreUsuarioRegistra))
+                    continue;
 
                 _dgvSolicitudes.Rows.Add(
                     sol.IdMerma,
                     $"{sol.NombreInsumo}",
-                    $"{sol.Cantidad:N2} {sol.UnidadAbreviatura}",
+                    FormatoInventario.Cantidad(sol.Cantidad, sol.UnidadAbreviatura),
                     sol.CodigoLote,
                     sol.Motivo,
                     sol.CostoEstimado.ToString("C2", _culturaMxn),
@@ -477,7 +466,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             Label lblTit = new Label
             {
-                Text = $"{sol.NombreInsumo} ({sol.Cantidad:N2} {sol.UnidadAbreviatura})",
+                Text = $"{sol.NombreInsumo} ({FormatoInventario.Cantidad(sol.Cantidad, sol.UnidadAbreviatura)})",
                 Font = new Font("Segoe UI", 14F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(24, 18),

@@ -27,8 +27,9 @@ namespace CapaLogica
             string metodoPago,
             decimal? montoRecibido)
         {
-            if (!SesionActual.HaySesionActiva)
-                return (false, "No hay una sesión activa.", null);
+            var permiso = Permisos.Verificar(Operacion.RegistrarVenta);
+            if (!permiso.Exito)
+                return (false, permiso.Mensaje, null);
 
             if (productos == null || productos.Count == 0)
                 return (false, "Agrega al menos un producto a la orden.", null);
@@ -43,6 +44,9 @@ namespace CapaLogica
             bool esEfectivo = metodo == "Efectivo";
             if (esEfectivo && (!montoRecibido.HasValue || montoRecibido.Value <= 0))
                 return (false, "Captura el monto recibido en efectivo.", null);
+
+            if (montoRecibido.HasValue && Redondeo.ExcedeDecimales(montoRecibido.Value, Redondeo.DecimalesImporte))
+                return (false, "El monto recibido admite como máximo 2 decimales (centavos).", null);
 
             // Juntar productos repetidos en una sola línea
             var detalles = productos
@@ -87,13 +91,26 @@ namespace CapaLogica
         /// <summary>estado: null = todas, "Confirmada" o "Cancelada".</summary>
         public List<Venta> ObtenerVentas(DateTime desde, DateTime hasta, string? estado = null)
         {
+            ExigirPermiso(Operacion.ConsultarVentas);
+
             if (hasta.Date < desde.Date)
                 (desde, hasta) = (hasta, desde);
 
             return _datos.ObtenerVentas(desde, hasta, estado);
         }
 
-        public Venta? ObtenerVentaConDetalle(int idVenta) => _datos.ObtenerVentaConDetalle(idVenta);
+        public Venta? ObtenerVentaConDetalle(int idVenta)
+        {
+            ExigirPermiso(Operacion.ConsultarVentas);
+            return _datos.ObtenerVentaConDetalle(idVenta);
+        }
+
+        private static void ExigirPermiso(Operacion op)
+        {
+            var permiso = Permisos.Verificar(op);
+            if (!permiso.Exito)
+                throw new UnauthorizedAccessException(permiso.Mensaje);
+        }
 
         public int ContarMisVentasHoy()
             => SesionActual.HaySesionActiva ? _datos.ContarVentasHoyPorUsuario(SesionActual.IdUsuario) : 0;
@@ -104,12 +121,13 @@ namespace CapaLogica
 
         /// <summary>
         /// Cancela una venta confirmada y regresa sus insumos al inventario.
-        /// Cualquier usuario puede solicitarla, pero debe capturarse el NIP de un Administrador activo.
+        /// RF-07: solo el Administrador (desde el historial) y además con su NIP como confirmación (RNF-13).
         /// </summary>
         public (bool Exito, string Mensaje) CancelarVenta(int idVenta, string motivo, string nipAdministrador)
         {
-            if (!SesionActual.HaySesionActiva)
-                return (false, "No hay una sesión activa.");
+            var permiso = Permisos.Verificar(Operacion.CancelarVenta);
+            if (!permiso.Exito)
+                return permiso;
 
             if (idVenta <= 0)
                 return (false, "Selecciona una venta válida.");

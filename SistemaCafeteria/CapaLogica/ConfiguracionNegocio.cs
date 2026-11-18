@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using CapaDatos;
 using CapaEntidades;
@@ -25,8 +26,16 @@ namespace CapaLogica
             string textoRojo,
             decimal limiteEconomicoMerma)
         {
+            // RF-12 / RNF-10: solo el Administrador modifica los parámetros globales
+            var permiso = Permisos.Verificar(Operacion.ConfigurarParametros);
+            if (!permiso.Exito)
+                return (false, permiso.Mensaje, null);
+
             if (limiteEconomicoMerma < 0)
                 return (false, "El límite económico de mermas no puede ser negativo.", null);
+
+            if (Redondeo.ExcedeDecimales(limiteEconomicoMerma, Redondeo.DecimalesImporte))
+                return (false, "El límite económico admite como máximo 2 decimales (centavos).", null);
 
             if (!IntentarExtraerMinimo(textoVerde, out decimal verdeMin) ||
                 !IntentarExtraerRango(textoAmarillo, out decimal amarilloMin, out decimal amarilloMax) ||
@@ -69,7 +78,7 @@ namespace CapaLogica
             min = 0;
             var matches = Regex.Matches(texto ?? string.Empty, @"\d+(\.\d+)?");
             if (matches.Count == 0) return false;
-            return decimal.TryParse(matches[0].Value, out min);
+            return decimal.TryParse(matches[0].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out min);
         }
 
         private static bool IntentarExtraerMaximo(string texto, out decimal max)
@@ -77,7 +86,7 @@ namespace CapaLogica
             max = 0;
             var matches = Regex.Matches(texto ?? string.Empty, @"\d+(\.\d+)?");
             if (matches.Count == 0) return false;
-            return decimal.TryParse(matches[^1].Value, out max);
+            return decimal.TryParse(matches[^1].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out max);
         }
 
         private static bool IntentarExtraerRango(string texto, out decimal min, out decimal max)
@@ -86,8 +95,8 @@ namespace CapaLogica
             max = 0;
             var matches = Regex.Matches(texto ?? string.Empty, @"\d+(\.\d+)?");
             if (matches.Count < 2) return false;
-            return decimal.TryParse(matches[0].Value, out min) &&
-                   decimal.TryParse(matches[1].Value, out max);
+            return decimal.TryParse(matches[0].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out min) &&
+                   decimal.TryParse(matches[1].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out max);
         }
     }
 }

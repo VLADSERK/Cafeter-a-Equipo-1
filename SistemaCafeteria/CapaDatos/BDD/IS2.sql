@@ -227,7 +227,8 @@ VALUES (50.00, 21.00, 49.00, 20.00, 100.00);
 
 INSERT INTO `Rol` (`nombre`, `descripcion`) VALUES
 ('Administrador', 'Control total: usuarios, recetas, entradas de almacén y autorización de mermas'),
-('Cajero', 'Operación de punto de venta, cobro, recepción de mercancía y registro de mermas operativas');
+('Cajero', 'Operación de punto de venta, cobro, recepción de mercancía y registro de mermas operativas'),
+('Barista', 'Preparación de bebidas, punto de venta, recepción de mercancía y registro de mermas operativas');
 
 INSERT INTO `UnidadMedida` (`nombre`, `abreviatura`, `tipo`) VALUES
 ('Gramo', 'g', 'Masa'),
@@ -236,11 +237,11 @@ INSERT INTO `UnidadMedida` (`nombre`, `abreviatura`, `tipo`) VALUES
 ('Litro', 'L', 'Volumen'),
 ('Pieza', 'pz', 'Unidad');
 
+-- Categorías de producto definidas en RF-04: Bebidas Calientes, Bebidas Frías y Repostería
 INSERT INTO `Categoria` (`nombre`) VALUES
 ('Bebidas Calientes'),
 ('Bebidas Frías'),
-('Panadería y Repostería'),
-('Alimentos');
+('Panadería y Repostería');
 
 INSERT INTO `Proveedor` (`nombre`, `telefono`, `correo`, `direccion`, `estado`) VALUES
 ('Tostadores del Sur S.A.', '55-4812-9034', 'ventas@tostadoresdelsur.mx', 'Col. Roma Norte, CDMX', 1),

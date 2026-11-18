@@ -9,15 +9,21 @@ namespace CapaLogica
     {
         private readonly AutorizacionMermaDatos _datos = new();
 
-        public List<Merma> ObtenerPendientes() => _datos.ObtenerMermasPendientes();
+        /// <summary>Bandeja de mermas pendientes (solo Administrador, RNF-10).</summary>
+        public List<Merma> ObtenerPendientes()
+        {
+            var permiso = Permisos.Verificar(Operacion.AutorizarMerma);
+            if (!permiso.Exito)
+                throw new UnauthorizedAccessException(permiso.Mensaje);
+
+            return _datos.ObtenerMermasPendientes();
+        }
 
         public (bool Exito, string Mensaje) ResolverSolicitud(int idMerma, bool aprobar, string? observaciones)
         {
-            if (!SesionActual.HaySesionActiva)
-                return (false, "No hay una sesión activa.");
-
-            if (SesionActual.Rol != "Administrador")
-                return (false, "Se requieren privilegios de Administrador para autorizar o rechazar mermas.");
+            var permiso = Permisos.Verificar(Operacion.AutorizarMerma);
+            if (!permiso.Exito)
+                return permiso;
 
             if (idMerma <= 0)
                 return (false, "Selecciona una merma válida de la lista.");
