@@ -9,9 +9,23 @@ namespace CapaLogica
     public class VentaNegocio
     {
         private readonly VentaDatos _datos = new();
+        private readonly CatalogoDatos _catalogoDatos = new();
         private readonly AuthNegocio _auth = new();
 
         public static readonly string[] MetodosPago = { "Efectivo", "Tarjeta", "Transferencia" };
+
+        /// <summary>Máximo de unidades de un mismo producto por venta (además del límite que impongan los insumos).</summary>
+        public const int LimitePorProducto = 20;
+
+        /// <summary>
+        /// Disponibilidad por producto según recetas vigentes y existencias actuales,
+        /// con el límite fijo por producto. La pantalla de venta la consulta al cargar y tras cada venta.
+        /// </summary>
+        public DisponibilidadVenta ObtenerDisponibilidad()
+        {
+            ExigirPermiso(Operacion.RegistrarVenta);
+            return new DisponibilidadVenta(_catalogoDatos.ObtenerConsumoRecetasActivas(), LimitePorProducto);
+        }
 
         // =====================================================================
         // COBRO
@@ -53,6 +67,10 @@ namespace CapaLogica
                 .GroupBy(p => p.IdProducto)
                 .Select(g => new DetalleVenta { IdProducto = g.Key, Cantidad = g.Sum(x => x.Cantidad) })
                 .ToList();
+
+            // Límite por producto validado aquí, no solo en la pantalla (RNF-10)
+            if (detalles.Any(d => d.Cantidad > LimitePorProducto))
+                return (false, $"Cada producto admite como máximo {LimitePorProducto} unidades por venta.", null);
 
             var venta = new Venta
             {

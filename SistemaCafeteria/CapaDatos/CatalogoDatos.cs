@@ -114,6 +114,64 @@ namespace CapaDatos
             return producto;
         }
 
+        /// <summary>
+        /// Consumo por unidad vendida de cada insumo en la receta vigente de cada producto
+        /// (ya convertido a la unidad del insumo) y la existencia actual del insumo.
+        /// Usa las mismas reglas que <see cref="VentaDatos.RegistrarVenta"/>: versión activa con el
+        /// número más alto y existencia = suma de lotes con cantidad disponible mayor a cero.
+        /// </summary>
+        public List<ConsumoRecetaInsumo> ObtenerConsumoRecetasActivas()
+        {
+            const string sql = @"
+                SELECT vr.id_producto,
+                       dr.id_insumo,
+                       dr.cantidad,
+                       ur.abreviatura AS abrev_receta,
+                       ur.tipo        AS tipo_receta,
+                       ui.abreviatura AS abrev_insumo,
+                       ui.tipo        AS tipo_insumo,
+                       (SELECT COALESCE(SUM(l.cantidad_disponible), 0)
+                        FROM Lote l
+                        WHERE l.id_insumo = dr.id_insumo
+                          AND l.cantidad_disponible > 0) AS existencia
+                FROM VersionReceta vr
+                INNER JOIN (
+                    SELECT id_producto, MAX(numero_version) AS numero_version
+                    FROM VersionReceta
+                    WHERE estado = TRUE
+                    GROUP BY id_producto
+                ) vigente ON vigente.id_producto = vr.id_producto
+                         AND vigente.numero_version = vr.numero_version
+                INNER JOIN DetalleReceta dr ON dr.id_version_receta = vr.id_version_receta
+                INNER JOIN Insumo i         ON i.id_insumo  = dr.id_insumo
+                INNER JOIN UnidadMedida ur  ON ur.id_unidad = dr.id_unidad
+                INNER JOIN UnidadMedida ui  ON ui.id_unidad = i.id_unidad
+                WHERE vr.estado = TRUE;";
+
+            var lista = new List<ConsumoRecetaInsumo>();
+
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand(sql, conn);
+            using var reader = cmd.ExecuteReader();
+
+            while (reader.Read())
+            {
+                decimal factor = ConversionUnidades.Factor(
+                    reader.GetString("abrev_receta"), reader.GetString("tipo_receta"),
+                    reader.GetString("abrev_insumo"), reader.GetString("tipo_insumo"));
+
+                lista.Add(new ConsumoRecetaInsumo
+                {
+                    IdProducto = reader.GetInt32("id_producto"),
+                    IdInsumo = reader.GetInt32("id_insumo"),
+                    ConsumoPorUnidad = reader.GetDecimal("cantidad") * factor,
+                    Existencia = reader.GetDecimal("existencia")
+                });
+            }
+
+            return lista;
+        }
+
         public int InsertarProducto(Producto producto)
         {
             const string sql = @"

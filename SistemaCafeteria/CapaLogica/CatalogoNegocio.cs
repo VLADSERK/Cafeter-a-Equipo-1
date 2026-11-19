@@ -76,20 +76,8 @@ namespace CapaLogica
             if (desde.IdUnidad == hacia.IdUnidad)
                 return 1m;
 
-            if (!string.Equals(desde.Tipo, hacia.Tipo, StringComparison.OrdinalIgnoreCase))
-                return 1m;
-
-            return FactorBase(desde.Abreviatura) / FactorBase(hacia.Abreviatura);
+            return ConversionUnidades.Factor(desde.Abreviatura, desde.Tipo, hacia.Abreviatura, hacia.Tipo);
         }
-
-        private static decimal FactorBase(string abreviatura) => abreviatura.Trim().ToLowerInvariant() switch
-        {
-            "g" => 0.001m,
-            "kg" => 1m,
-            "ml" => 0.001m,
-            "l" => 1m,
-            _ => 1m
-        };
 
         // =====================================================================
         // PRODUCTOS (solo Administrador)

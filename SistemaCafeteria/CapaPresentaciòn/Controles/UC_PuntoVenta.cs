@@ -32,6 +32,11 @@ namespace CapaPresentaciòn.Controles
 
         private List<Ent.Producto> _catalogoCompleto = new();
         private readonly List<ItemComanda> _comandaActual = new();
+
+        // Disponibilidad por receta e inventario + límite fijo por producto (se recalcula con cada cambio de la comanda)
+        private DisponibilidadVenta _disponibilidad = DisponibilidadVenta.SoloLimite(VentaNegocio.LimitePorProducto);
+        private readonly Dictionary<int, (Label Estado, Button Agregar)> _controlesTarjeta = new();
+        private readonly ToolTip _toolTip = new();
         private readonly Dictionary<string, Image> _cacheImagenes = new(StringComparer.OrdinalIgnoreCase);
         private string _categoriaActiva = CatCalientes;
         private string? _ultimoFolio;
@@ -68,6 +73,7 @@ namespace CapaPresentaciòn.Controles
         public UC_PuntoVenta()
         {
             InitializeComponent();
+            Disposed += (s, e) => _toolTip.Dispose();
             ConfigurarInterfazPuntoVenta();
             RenderizarProductos();
             RefrescarComanda();
@@ -91,10 +97,12 @@ namespace CapaPresentaciòn.Controles
             try
             {
                 _catalogoCompleto = _catalogoNegocio.ObtenerProductosParaVenta();
+                _disponibilidad = _ventaNegocio.ObtenerDisponibilidad();
             }
             catch (Exception ex)
             {
                 _catalogoCompleto = new List<Ent.Producto>();
+                _disponibilidad = DisponibilidadVenta.SoloLimite(VentaNegocio.LimitePorProducto);
                 MessageBox.Show($"No se pudo cargar el catálogo desde MySQL:\n{ex.Message}",
                     "Error de base de datos", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -106,6 +114,16 @@ namespace CapaPresentaciòn.Controles
                 _comandaActual.Remove(item);
                 if (actualizado != null)
                     _comandaActual.Add(new ItemComanda { Producto = actualizado, Cantidad = item.Cantidad });
+            }
+
+            // Si las existencias bajaron, ajustar las cantidades de la comanda al nuevo máximo
+            foreach (var item in _comandaActual.ToList())
+            {
+                int maximo = _disponibilidad.MaximoPara(item.Producto.IdProducto, CantidadesComanda());
+                if (item.Cantidad <= maximo) continue;
+
+                if (maximo <= 0) _comandaActual.Remove(item);
+                else item.Cantidad = maximo;
             }
 
             RenderizarProductos();
@@ -292,6 +310,7 @@ namespace CapaPresentaciòn.Controles
         {
             _flowProductos.SuspendLayout();
             _flowProductos.Controls.Clear();
+            _controlesTarjeta.Clear();
 
             var filtrados = _catalogoCompleto.Where(p => p.NombreCategoria == _categoriaActiva).ToList();
             _lblBadgeContador.Text = $"{filtrados.Count} productos";
@@ -306,7 +325,60 @@ namespace CapaPresentaciòn.Controles
             }
 
             _flowProductos.ResumeLayout();
+            ActualizarEstadoTarjetas();
         }
+
+        // =====================================================================
+        // DISPONIBILIDAD (límite por producto + insumos de la receta)
+        // =====================================================================
+
+        private Dictionary<int, int> CantidadesComanda()
+            => _comandaActual.ToDictionary(i => i.Producto.IdProducto, i => i.Cantidad);
+
+        /// <summary>
+        /// Etiqueta y botón de cada tarjeta según lo que aún se puede agregar, considerando lo que
+        /// ya consume el resto de la comanda (insumos compartidos entre productos).
+        /// </summary>
+        private void ActualizarEstadoTarjetas()
+        {
+            var cantidades = CantidadesComanda();
+            int limite = _disponibilidad.LimitePorProducto;
+
+            foreach (var (idProducto, (lblEstado, btnAgregar)) in _controlesTarjeta)
+            {
+                int maximo = _disponibilidad.MaximoPara(idProducto, cantidades);
+                cantidades.TryGetValue(idProducto, out int enComanda);
+                int restante = Math.Max(0, maximo - enComanda);
+
+                if (maximo == 0)
+                {
+                    lblEstado.Text = "Agotado";
+                    lblEstado.ForeColor = TemaCafeteria.SemaforoRojo;
+                    _toolTip.SetToolTip(lblEstado, "No hay insumos suficientes para preparar este producto con lo que lleva la venta.");
+                }
+                else if (restante == 0)
+                {
+                    lblEstado.Text = enComanda >= limite ? $"Límite: {limite} por venta" : "Máximo en la venta";
+                    lblEstado.ForeColor = TemaCafeteria.CafePrimario;
+                    _toolTip.SetToolTip(lblEstado, enComanda >= limite
+                        ? $"Cada producto admite como máximo {limite} unidades por venta."
+                        : "Los insumos disponibles no alcanzan para agregar más unidades.");
+                }
+                else
+                {
+                    lblEstado.Text = restante <= 5 ? $"Últimas {restante}" : $"Disponibles: {restante}";
+                    lblEstado.ForeColor = restante <= 5 ? ColorTranslator.FromHtml("#B26A00") : TemaCafeteria.SemaforoVerde;
+                    _toolTip.SetToolTip(lblEstado, $"Puedes agregar {restante} más (máximo {limite} por producto, según los insumos de la receta).");
+                }
+
+                btnAgregar.Enabled = restante > 0;
+                btnAgregar.BackColor = restante > 0 ? TemaCafeteria.CafePrimario : TemaCafeteria.SemaforoBlanco;
+            }
+        }
+
+        /// <summary>True si aún cabe una unidad más del producto en la comanda.</summary>
+        private bool PuedeAgregarUno(int idProducto)
+            => _disponibilidad.RestantePara(idProducto, CantidadesComanda()) > 0;
 
         private PanelRedondeado CrearTarjetaProducto(Ent.Producto prod, int ancho)
         {
@@ -328,7 +400,7 @@ namespace CapaPresentaciòn.Controles
 
             Label lblDisponible = new Label
             {
-                Text = "Disponible",
+                Text = "Disponibles",
                 Font = new Font("Segoe UI", 8F, FontStyle.Bold),
                 ForeColor = TemaCafeteria.SemaforoVerde,
                 BackColor = Color.White,
@@ -405,6 +477,8 @@ namespace CapaPresentaciòn.Controles
             };
             btnAgregar.FlatAppearance.BorderSize = 0;
             btnAgregar.Click += (s, e) => AgregarProductoAComanda(prod);
+
+            _controlesTarjeta[prod.IdProducto] = (lblDisponible, btnAgregar);
 
             card.Controls.AddRange(new Control[] { pnlImagen, lblNombre, lblDesc, lblPrecio, btnAgregar });
             return card;
@@ -638,6 +712,13 @@ namespace CapaPresentaciòn.Controles
 
         private void AgregarProductoAComanda(Ent.Producto prod)
         {
+            // El botón ya se deshabilita al llegar al máximo; esta revisión cubre clics rápidos
+            if (!PuedeAgregarUno(prod.IdProducto))
+            {
+                ActualizarEstadoTarjetas();
+                return;
+            }
+
             var existente = _comandaActual.FirstOrDefault(i => i.Producto.IdProducto == prod.IdProducto);
             if (existente != null)
             {
@@ -657,8 +738,25 @@ namespace CapaPresentaciòn.Controles
 
             int anchoFila = Math.Max(330, _flowComanda.ClientSize.Width - 10);
 
+            // Posiciones calculadas desde la derecha: [nombre] [−] [cantidad] [+] [importe] [borrar]
+            // La cantidad tiene 40 px para que quepan 2 dígitos aun con escalado de pantalla (125 % / 150 %).
+            const int anchoCantidad = 40;
+            int xBorrar = anchoFila - 30;
+            int xImporte = xBorrar - 74;
+            int xMas = xImporte - 32;
+            int xCantidad = xMas - anchoCantidad - 2;
+            int xMenos = xCantidad - 28;
+
+            if (_pnlDerecho.Controls["colCant"] is Label colCant)
+                colCant.Left = _flowComanda.Left + xCantidad + (anchoCantidad - colCant.Width) / 2;
+
+            var cantidades = CantidadesComanda();
+
             foreach (var item in _comandaActual.ToList())
             {
+                int maximo = _disponibilidad.MaximoPara(item.Producto.IdProducto, cantidades);
+                bool enMaximo = item.Cantidad >= maximo;
+
                 Panel fila = new Panel
                 {
                     Size = new Size(anchoFila, 54),
@@ -677,14 +775,17 @@ namespace CapaPresentaciòn.Controles
                     Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                     ForeColor = TemaCafeteria.TextoOscuro,
                     Location = new Point(6, 6),
-                    Size = new Size(165, 20)
+                    Size = new Size(Math.Max(60, xMenos - 10), 20),
+                    AutoEllipsis = true
                 };
 
                 Label lblPrecioUnit = new Label
                 {
-                    Text = $"{item.Producto.Precio.ToString("C2", _culturaMxn)} c/u",
+                    Text = enMaximo
+                        ? $"{item.Producto.Precio.ToString("C2", _culturaMxn)} c/u · máx. {maximo}"
+                        : $"{item.Producto.Precio.ToString("C2", _culturaMxn)} c/u",
                     Font = new Font("Segoe UI", 8F),
-                    ForeColor = TemaCafeteria.TextoSecundario,
+                    ForeColor = enMaximo ? ColorTranslator.FromHtml("#B26A00") : TemaCafeteria.TextoSecundario,
                     Location = new Point(6, 26),
                     AutoSize = true
                 };
@@ -696,7 +797,7 @@ namespace CapaPresentaciòn.Controles
                     BackColor = TemaCafeteria.FondoCrema,
                     FlatStyle = FlatStyle.Flat,
                     Size = new Size(26, 26),
-                    Location = new Point(178, 12),
+                    Location = new Point(xMenos, 12),
                     Cursor = Cursors.Hand
                 };
                 btnMenos.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
@@ -709,10 +810,13 @@ namespace CapaPresentaciòn.Controles
 
                 Label lblCant = new Label
                 {
-                    Text = item.Cantidad.ToString(),
+                    Text = item.Cantidad.ToString(CultureInfo.InvariantCulture),
                     Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                    Location = new Point(206, 12),
-                    Size = new Size(26, 26),
+                    Location = new Point(xCantidad, 12),
+                    Size = new Size(anchoCantidad, 26),
+                    AutoSize = false,
+                    AutoEllipsis = false,
+                    UseCompatibleTextRendering = false,
                     TextAlign = ContentAlignment.MiddleCenter
                 };
 
@@ -723,12 +827,23 @@ namespace CapaPresentaciòn.Controles
                     BackColor = TemaCafeteria.FondoCrema,
                     FlatStyle = FlatStyle.Flat,
                     Size = new Size(26, 26),
-                    Location = new Point(234, 12),
-                    Cursor = Cursors.Hand
+                    Location = new Point(xMas, 12),
+                    Cursor = enMaximo ? Cursors.Default : Cursors.Hand,
+                    Enabled = !enMaximo
                 };
                 btnMas.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
+                _toolTip.SetToolTip(btnMas, enMaximo
+                    ? (maximo >= _disponibilidad.LimitePorProducto
+                        ? $"Máximo {_disponibilidad.LimitePorProducto} unidades por producto en cada venta."
+                        : "Los insumos disponibles no alcanzan para más unidades.")
+                    : "Agregar una unidad");
                 btnMas.Click += (s, e) =>
                 {
+                    if (!PuedeAgregarUno(item.Producto.IdProducto))
+                    {
+                        RefrescarComanda();
+                        return;
+                    }
                     item.Cantidad++;
                     RefrescarComanda();
                 };
@@ -741,7 +856,7 @@ namespace CapaPresentaciòn.Controles
                     BackColor = Color.Transparent,
                     FlatStyle = FlatStyle.Flat,
                     Size = new Size(28, 28),
-                    Location = new Point(anchoFila - 30, 11),
+                    Location = new Point(xBorrar, 11),
                     Cursor = Cursors.Hand
                 };
                 btnBorrar.FlatAppearance.BorderSize = 0;
@@ -756,7 +871,7 @@ namespace CapaPresentaciòn.Controles
                     Text = item.Importe.ToString("C2", _culturaMxn),
                     Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                     ForeColor = TemaCafeteria.TextoOscuro,
-                    Location = new Point(btnBorrar.Left - 76, 15),
+                    Location = new Point(xImporte, 15),
                     Size = new Size(72, 22),
                     TextAlign = ContentAlignment.MiddleRight
                 };
@@ -773,6 +888,7 @@ namespace CapaPresentaciòn.Controles
             int totalArticulos = _comandaActual.Sum(i => i.Cantidad);
             _lblBadgeArticulos.Text = $"{totalArticulos} {(totalArticulos == 1 ? "artículo" : "artículos")}";
             ActualizarTotalesYCambio();
+            ActualizarEstadoTarjetas();
         }
 
         private void ActualizarTotalesYCambio()

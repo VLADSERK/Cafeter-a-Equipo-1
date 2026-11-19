@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using CapaDatos;
 using CapaEntidades;
@@ -47,6 +48,20 @@ namespace CapaLogica
             var permiso = Permisos.Verificar(op);
             if (!permiso.Exito)
                 throw new UnauthorizedAccessException(permiso.Mensaje);
+        }
+
+        /// <summary>
+        /// Insumos activos para capturar una recepción, en orden alfabético por nombre
+        /// (sin acentos ni mayúsculas de por medio), para que el orden no cambie con las existencias.
+        /// </summary>
+        public List<Insumo> ObtenerInsumosParaRecepcion()
+        {
+            ExigirPermiso(Operacion.RegistrarRecepcion);
+
+            var comparador = StringComparer.Create(CultureInfo.GetCultureInfo("es-MX"), ignoreCase: true);
+            return _inventarioDatos.ObtenerInsumosConStock()
+                .OrderBy(i => i.Nombre, comparador)
+                .ToList();
         }
 
         /// <summary>
@@ -280,8 +295,8 @@ namespace CapaLogica
             if (Redondeo.ExcedeDecimales(cantidadRecibida, Redondeo.DecimalesCantidad))
                 return (false, "La cantidad recibida admite como máximo 3 decimales.");
 
-            if (costoUnitario < 0)
-                return (false, "El costo unitario no puede ser negativo.");
+            if (costoUnitario <= 0)
+                return (false, "El costo unitario debe ser mayor a cero.");
 
             if (Redondeo.ExcedeDecimales(costoUnitario, Redondeo.DecimalesImporte))
                 return (false, "El costo unitario admite como máximo 2 decimales (centavos).");

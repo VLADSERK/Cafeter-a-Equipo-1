@@ -15,7 +15,7 @@ namespace CapaDatos
         /// Transacción atómica:
         /// 1. Crea la venta y le asigna folio (V-000001).
         /// 2. Por cada producto: toma el precio y la receta vigente desde MySQL, inserta el DetalleVenta,
-        ///    descuenta cada insumo de los lotes en orden PEPS (caducidad más próxima primero),
+        ///    descuenta cada insumo de los lotes en orden PEPS (fecha y hora de recepción más antigua primero),
         ///    guarda la trazabilidad en HistorialRecetaVenta y el movimiento CONSUMO_VENTA en el kardex.
         /// 3. Calcula total y cambio.
         /// Si falta stock de cualquier insumo, se revierte todo y se lanza InvalidOperationException.
@@ -464,9 +464,7 @@ namespace CapaDatos
 
             while (reader.Read())
             {
-                string abrevReceta = reader.GetString("abrev_receta");
                 string abrevInsumo = reader.GetString("abrev_insumo");
-                bool mismoTipo = string.Equals(reader.GetString("tipo_receta"), reader.GetString("tipo_insumo"), StringComparison.OrdinalIgnoreCase);
 
                 lista.Add(new IngredienteVenta
                 {
@@ -474,7 +472,9 @@ namespace CapaDatos
                     NombreInsumo = reader.GetString("nombre_insumo"),
                     UnidadInsumo = abrevInsumo,
                     Cantidad = reader.GetDecimal("cantidad"),
-                    Factor = mismoTipo ? FactorBase(abrevReceta) / FactorBase(abrevInsumo) : 1m
+                    Factor = ConversionUnidades.Factor(
+                        reader.GetString("abrev_receta"), reader.GetString("tipo_receta"),
+                        abrevInsumo, reader.GetString("tipo_insumo"))
                 });
             }
 
@@ -578,15 +578,6 @@ namespace CapaDatos
                 restante -= tomar;
             }
         }
-
-        private static decimal FactorBase(string abreviatura) => abreviatura.Trim().ToLowerInvariant() switch
-        {
-            "g" => 0.001m,
-            "kg" => 1m,
-            "ml" => 0.001m,
-            "l" => 1m,
-            _ => 1m
-        };
 
         private static Venta MapearVenta(MySqlDataReader reader)
         {

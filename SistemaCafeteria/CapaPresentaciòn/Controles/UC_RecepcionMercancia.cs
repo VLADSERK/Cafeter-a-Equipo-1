@@ -56,10 +56,23 @@ namespace CapaPresentaciòn.Controles
         private Button _btnCancelar = null!;
         private Button _btnConfirmar = null!;
 
+        // RIU-04: errores de captura señalados junto a cada campo (sin MessageBox uno por uno)
+        private Panel _pnlCantidad = null!;
+        private Panel _pnlCostoUnit = null!;
+        private Label _lblResumenValidacion = null!;
+        private readonly Dictionary<Control, Label> _erroresCampo = new();
+        private readonly ToolTip _toolTip = new();
+
+        // Evita regenerar la vista previa del lote (consulta a MySQL) en cada tecla del buscador
+        private int _idInsumoVistaPrevia = -1;
+        private DateTime _fechaVistaPrevia = DateTime.MinValue;
+
         public UC_RecepcionMercancia()
         {
             InitializeComponent();
+            Disposed += (s, e) => _toolTip.Dispose();
             ConfigurarInterfazRecepcion();
+            _lblResumenValidacion.TextChanged += (s, e) => _toolTip.SetToolTip(_lblResumenValidacion, _lblResumenValidacion.Text);
             InicializarLogicaMysql();
         }
 
@@ -215,11 +228,15 @@ namespace CapaPresentaciòn.Controles
 
             // Fila 1: Insumo * | Proveedor *
             Label lblInsumo = CrearEtiquetaCampo("Insumo *", 26, 78);
+            // Orden alfabético y búsqueda escribiendo (autocompleta con los nombres de la lista)
             _cmbInsumo = new ComboBox
             {
                 Name = "cmbInsumo",
                 Font = new Font("Segoe UI", 10.5F),
-                DropDownStyle = ComboBoxStyle.DropDownList,
+                DropDownStyle = ComboBoxStyle.DropDown,
+                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+                AutoCompleteSource = AutoCompleteSource.ListItems,
+                MaxDropDownItems = 12,
                 Location = new Point(26, 102),
                 Height = 36
             };
@@ -236,7 +253,7 @@ namespace CapaPresentaciòn.Controles
 
             // Fila 2: Cantidad inicial * | Unidad de medida
             Label lblCantidad = CrearEtiquetaCampo("Cantidad inicial *", 26, 158);
-            Panel pnlCantidad = new Panel
+            _pnlCantidad = new Panel
             {
                 Name = "pnlCantidad",
                 Location = new Point(26, 182),
@@ -263,7 +280,7 @@ namespace CapaPresentaciòn.Controles
                 ForeColor = TemaCafeteria.TextoSecundario,
                 AutoSize = true
             };
-            pnlCantidad.Controls.AddRange(new Control[] { _txtCantidad, _lblUnidadSufijo });
+            _pnlCantidad.Controls.AddRange(new Control[] { _txtCantidad, _lblUnidadSufijo });
 
             Label lblUnidad = CrearEtiquetaCampo("Unidad de medida", 320, 158);
             _cmbUnidad = new ComboBox
@@ -277,7 +294,7 @@ namespace CapaPresentaciòn.Controles
 
             // Fila 3: Costo unitario * | Costo estimado
             Label lblCostoUnit = CrearEtiquetaCampo("Costo unitario *", 26, 242);
-            Panel pnlCostoUnit = new Panel
+            _pnlCostoUnit = new Panel
             {
                 Name = "pnlCostoUnit",
                 Location = new Point(26, 266),
@@ -314,7 +331,7 @@ namespace CapaPresentaciòn.Controles
                 ForeColor = TemaCafeteria.TextoSecundario,
                 AutoSize = true
             };
-            pnlCostoUnit.Controls.AddRange(new Control[] { lblSigno1, _txtCostoUnitario, lblMxn1 });
+            _pnlCostoUnit.Controls.AddRange(new Control[] { lblSigno1, _txtCostoUnitario, lblMxn1 });
 
             Label lblCostoEst = CrearEtiquetaCampo("Costo estimado", 320, 242);
             Panel pnlCostoEst = new Panel
@@ -389,9 +406,9 @@ namespace CapaPresentaciòn.Controles
                 badge01, lblCardTitulo, lblCardSub,
                 lblInsumo, _cmbInsumo,
                 lblProveedor, _cmbProveedor,
-                lblCantidad, pnlCantidad,
+                lblCantidad, _pnlCantidad,
                 lblUnidad, _cmbUnidad,
-                lblCostoUnit, pnlCostoUnit,
+                lblCostoUnit, _pnlCostoUnit,
                 lblCostoEst, pnlCostoEst,
                 lblFechaRec, _dtpRecepcion,
                 lblFechaCad, _dtpCaducidad, _chkSinCaducidad
@@ -564,7 +581,20 @@ namespace CapaPresentaciòn.Controles
             };
             _btnConfirmar.FlatAppearance.BorderSize = 0;
 
-            _barraAcciones.Controls.AddRange(new Control[] { _btnCancelar, _btnConfirmar });
+            // Resumen de validación (RIU-04 / RIU-08): cuántos campos hay que corregir o el error de guardado
+            _lblResumenValidacion = new Label
+            {
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                ForeColor = ColorTranslator.FromHtml("#FFCDD2"),
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoSize = false,
+                AutoEllipsis = true,
+                Location = new Point(18, 6),
+                Text = string.Empty
+            };
+
+            _barraAcciones.Controls.AddRange(new Control[] { _lblResumenValidacion, _btnCancelar, _btnConfirmar });
         }
 
         private Label CrearEtiquetaCampo(string texto, int x, int y)
@@ -588,14 +618,34 @@ namespace CapaPresentaciòn.Controles
             CargarCatalogosDesdeMysql();
 
             _cmbInsumo.SelectedIndexChanged += (s, e) => ActualizarVistaPreviaLote();
+            _cmbInsumo.TextChanged += (s, e) =>
+            {
+                LimpiarErrorCampo(_cmbInsumo);
+                ActualizarVistaPreviaLote();
+            };
+            _cmbInsumo.Leave += (s, e) => NormalizarInsumoEscrito();
+            _cmbProveedor.SelectedIndexChanged += (s, e) => LimpiarErrorCampo(_cmbProveedor);
+
             _dtpRecepcion.ValueChanged += (s, e) =>
             {
                 _lblFechaOperativaValor.Text = _dtpRecepcion.Value.ToString("dd 'de' MMMM 'de' yyyy", _culturaMxn);
+                LimpiarErrorCampo(_dtpCaducidad);
                 ActualizarVistaPreviaLote();
             };
+            _dtpCaducidad.ValueChanged += (s, e) => LimpiarErrorCampo(_dtpCaducidad);
+            _chkSinCaducidad.CheckedChanged += (s, e) => LimpiarErrorCampo(_dtpCaducidad);
 
-            _txtCantidad.TextChanged += (s, e) => RecalcularCostoEstimado();
-            _txtCostoUnitario.TextChanged += (s, e) => RecalcularCostoEstimado();
+            _txtCantidad.TextChanged += (s, e) =>
+            {
+                LimpiarErrorCampo(_pnlCantidad);
+                RecalcularCostoEstimado();
+            };
+            _txtCostoUnitario.TextChanged += (s, e) =>
+            {
+                LimpiarErrorCampo(_pnlCostoUnit);
+                RecalcularCostoEstimado();
+            };
+            _txtCodigoBarras.TextChanged += (s, e) => LimpiarErrorCampo(_txtCodigoBarras);
 
             _picCodigoBarras.Paint += PicCodigoBarras_Paint;
 
@@ -612,10 +662,8 @@ namespace CapaPresentaciòn.Controles
             {
                 _invNegocio.AsegurarDatosInicialesInventario();
 
-                _insumosDisponibles = _invNegocio
-                    .ObtenerResumenInventarioCompleto()
-                    .Select(r => r.Insumo)
-                    .ToList();
+                // Orden alfabético estable (no por urgencia del semáforo)
+                _insumosDisponibles = _invNegocio.ObtenerInsumosParaRecepcion();
 
                 _proveedoresDisponibles = _invNegocio.ObtenerProveedores();
                 _unidadesDisponibles = _invNegocio.ObtenerUnidades();
@@ -625,6 +673,7 @@ namespace CapaPresentaciòn.Controles
                 _cmbInsumo.ValueMember = "IdInsumo";
                 _cmbInsumo.DataSource = _insumosDisponibles;
                 _cmbInsumo.SelectedIndex = -1;
+                _cmbInsumo.Text = string.Empty;
 
                 _cmbProveedor.DataSource = null;
                 _cmbProveedor.DisplayMember = "Nombre";
@@ -650,9 +699,44 @@ namespace CapaPresentaciòn.Controles
             }
         }
 
+        /// <summary>
+        /// Insumo elegido en el combo: el seleccionado de la lista o el que coincida exactamente
+        /// con el texto escrito (sin distinguir mayúsculas ni acentos). Null si no existe.
+        /// </summary>
+        private Insumo? ResolverInsumo()
+        {
+            string texto = _cmbInsumo.Text.Trim();
+            if (texto.Length == 0)
+                return null;
+
+            bool Coincide(Insumo i) => _culturaMxn.CompareInfo.Compare(
+                i.Nombre.Trim(), texto, CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) == 0;
+
+            if (_cmbInsumo.SelectedItem is Insumo seleccionado && Coincide(seleccionado))
+                return seleccionado;
+
+            return _insumosDisponibles.FirstOrDefault(Coincide);
+        }
+
+        /// <summary>Al salir del buscador, si lo escrito coincide con un insumo, se selecciona de la lista.</summary>
+        private void NormalizarInsumoEscrito()
+        {
+            var insumo = ResolverInsumo();
+            if (insumo != null && !ReferenceEquals(_cmbInsumo.SelectedItem, insumo))
+                _cmbInsumo.SelectedItem = insumo;
+        }
+
         private void ActualizarVistaPreviaLote()
         {
-            var insumoSel = _cmbInsumo.SelectedItem as Insumo;
+            var insumoSel = ResolverInsumo();
+
+            // La vista previa consulta MySQL: solo se regenera si cambió el insumo o la fecha
+            int idInsumo = insumoSel?.IdInsumo ?? 0;
+            DateTime fecha = _dtpRecepcion.Value.Date;
+            if (idInsumo == _idInsumoVistaPrevia && fecha == _fechaVistaPrevia)
+                return;
+            _idInsumoVistaPrevia = idInsumo;
+            _fechaVistaPrevia = fecha;
 
             if (insumoSel != null)
             {
@@ -667,7 +751,15 @@ namespace CapaPresentaciòn.Controles
                 _cmbUnidad.SelectedIndex = -1;
             }
 
-            _lblCodigoLote.Text = _invNegocio.GenerarVistaPreviaCodigoLote(insumoSel, _dtpRecepcion.Value);
+            try
+            {
+                _lblCodigoLote.Text = _invNegocio.GenerarVistaPreviaCodigoLote(insumoSel, _dtpRecepcion.Value);
+            }
+            catch (Exception)
+            {
+                // Solo es una vista previa: el código definitivo se genera al confirmar
+                _lblCodigoLote.Text = $"LOT-INS-{_dtpRecepcion.Value:yyyyMMdd}-001";
+            }
             _picCodigoBarras.Invalidate();
         }
 
@@ -723,6 +815,7 @@ namespace CapaPresentaciòn.Controles
         private void LimpiarFormulario()
         {
             _cmbInsumo.SelectedIndex = -1;
+            _cmbInsumo.Text = string.Empty;
             _cmbProveedor.SelectedIndex = -1;
             _cmbUnidad.SelectedIndex = -1;
             _txtCantidad.Clear();
@@ -732,48 +825,146 @@ namespace CapaPresentaciòn.Controles
             _dtpCaducidad.Value = DateTime.Now.AddMonths(3);
             _chkSinCaducidad.Checked = false;
             _txtCodigoBarras.Clear();
+            LimpiarTodosLosErrores();
+            _idInsumoVistaPrevia = -1;
             ActualizarVistaPreviaLote();
+        }
+
+        // =========================================================================
+        // VALIDACIÓN EN PANTALLA (RIU-04): todos los errores a la vez, junto a su campo
+        // =========================================================================
+
+        /// <summary>
+        /// Revisa todos los campos y marca cada uno que tenga error con un mensaje debajo.
+        /// Devuelve false si hay al menos un error; no guarda nada. La lógica vuelve a validar al confirmar.
+        /// </summary>
+        private bool ValidarFormulario(
+            out Insumo? insumo, out Proveedor? proveedor,
+            out decimal cantidad, out decimal costo, out DateTime? caducidad)
+        {
+            LimpiarTodosLosErrores();
+            var conError = new List<Control>();
+
+            void Error(Control campo, string mensaje)
+            {
+                MarcarErrorCampo(campo, mensaje);
+                conError.Add(campo);
+            }
+
+            insumo = ResolverInsumo();
+            if (insumo == null)
+                Error(_cmbInsumo, string.IsNullOrWhiteSpace(_cmbInsumo.Text)
+                    ? "Selecciona o escribe el insumo."
+                    : "No existe un insumo con ese nombre; elige uno de la lista.");
+
+            proveedor = _cmbProveedor.SelectedItem as Proveedor;
+            if (proveedor == null)
+                Error(_cmbProveedor, "Selecciona el proveedor.");
+
+            if (string.IsNullOrWhiteSpace(_txtCantidad.Text))
+            {
+                cantidad = 0m;
+                Error(_pnlCantidad, "Captura la cantidad recibida.");
+            }
+            else if (!EntradaNumerica.TryLeerCantidad(_txtCantidad.Text, out cantidad, out string errorCantidad))
+                Error(_pnlCantidad, errorCantidad);
+            else if (cantidad <= 0)
+                Error(_pnlCantidad, "La cantidad inicial debe ser mayor a cero.");
+
+            if (string.IsNullOrWhiteSpace(_txtCostoUnitario.Text))
+            {
+                costo = 0m;
+                Error(_pnlCostoUnit, "Captura el costo unitario.");
+            }
+            else if (!EntradaNumerica.TryLeerImporte(_txtCostoUnitario.Text, out costo, out string errorCosto))
+                Error(_pnlCostoUnit, errorCosto.Replace("El importe", "El costo unitario"));
+            else if (costo <= 0)
+                Error(_pnlCostoUnit, "El costo unitario debe ser mayor a cero.");
+
+            caducidad = _chkSinCaducidad.Checked ? null : _dtpCaducidad.Value.Date;
+            if (caducidad.HasValue && caducidad.Value <= _dtpRecepcion.Value.Date)
+                Error(_dtpCaducidad, "Debe ser posterior a la recepción (o marca \"No aplica\").");
+
+            string codigoBarras = _txtCodigoBarras.Text.Trim();
+            if (codigoBarras.Length > 0 && !codigoBarras.All(char.IsLetterOrDigit))
+                Error(_txtCodigoBarras, "Solo admite letras y números.");
+
+            if (conError.Count == 0)
+                return true;
+
+            _lblResumenValidacion.Text = conError.Count == 1
+                ? "⚠  Corrige el campo marcado en rojo antes de confirmar."
+                : $"⚠  Corrige los {conError.Count} campos marcados en rojo antes de confirmar.";
+
+            // Foco en el primer campo con error (dentro de los paneles, en su caja de texto)
+            Control primero = conError[0];
+            if (primero == _pnlCantidad) _txtCantidad.Focus();
+            else if (primero == _pnlCostoUnit) _txtCostoUnitario.Focus();
+            else primero.Focus();
+
+            return false;
+        }
+
+        private void MarcarErrorCampo(Control campo, string mensaje)
+        {
+            if (!_erroresCampo.TryGetValue(campo, out var lbl))
+            {
+                lbl = new Label
+                {
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular),
+                    ForeColor = TemaCafeteria.ErrorRojo,
+                    BackColor = Color.Transparent,
+                    AutoSize = false,
+                    AutoEllipsis = true,
+                    Height = 15
+                };
+                campo.Parent?.Controls.Add(lbl);
+                _erroresCampo[campo] = lbl;
+            }
+
+            lbl.Text = "⚠ " + mensaje;
+            lbl.Visible = true;
+            UbicarErrorCampo(campo, lbl);
+            lbl.BringToFront();
+        }
+
+        private void LimpiarErrorCampo(Control campo)
+        {
+            if (_erroresCampo.TryGetValue(campo, out var lbl))
+                lbl.Visible = false;
+
+            // Al corregir el último campo marcado desaparece también el resumen
+            if (!_erroresCampo.Values.Any(l => l.Visible))
+                _lblResumenValidacion.Text = string.Empty;
+        }
+
+        private void LimpiarTodosLosErrores()
+        {
+            foreach (var lbl in _erroresCampo.Values)
+                lbl.Visible = false;
+            _lblResumenValidacion.Text = string.Empty;
+        }
+
+        private void ReubicarErroresCampo()
+        {
+            foreach (var (campo, lbl) in _erroresCampo)
+                UbicarErrorCampo(campo, lbl);
+        }
+
+        private static void UbicarErrorCampo(Control campo, Label lbl)
+        {
+            lbl.Location = new Point(campo.Left, campo.Bottom + 1);
+            lbl.Width = Math.Max(120, campo.Width);
         }
 
         private void BtnConfirmar_Click(object? sender, EventArgs e)
         {
-            if (_cmbInsumo.SelectedItem is not Insumo insumoSel)
-            {
-                MessageBox.Show("Selecciona un insumo válido.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _cmbInsumo.Focus();
+            if (!ValidarFormulario(out var insumo, out var proveedor, out decimal cant, out decimal costo, out DateTime? caducidad)
+                || insumo == null || proveedor == null)
                 return;
-            }
 
-            if (_cmbProveedor.SelectedItem is not Proveedor provSel)
-            {
-                MessageBox.Show("Selecciona un proveedor válido.", "Campos obligatorios", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _cmbProveedor.Focus();
-                return;
-            }
-
-            if (!EntradaNumerica.TryLeerCantidad(_txtCantidad.Text, out decimal cant, out string errorCant) || cant <= 0)
-            {
-                string mensaje = errorCant.Length > 0 ? $"Cantidad inicial: {errorCant}" : "La cantidad inicial debe ser mayor a cero.";
-                MessageBox.Show(mensaje, "Validación de datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _txtCantidad.Focus();
-                return;
-            }
-
-            if (!EntradaNumerica.TryLeerImporte(_txtCostoUnitario.Text, out decimal costo, out string errorCosto) || costo <= 0)
-            {
-                string mensaje = errorCosto.Length > 0 ? $"Costo unitario: {errorCosto}" : "El costo unitario debe ser mayor a cero.";
-                MessageBox.Show(mensaje, "Validación de datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _txtCostoUnitario.Focus();
-                return;
-            }
-
-            DateTime? caducidad = _chkSinCaducidad.Checked ? null : _dtpCaducidad.Value.Date;
-            if (caducidad.HasValue && caducidad.Value <= _dtpRecepcion.Value.Date)
-            {
-                MessageBox.Show("La fecha de caducidad debe ser posterior a la fecha de recepción.\nSi el insumo no caduca, marca \"No aplica\".", "Control PEPS", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _dtpCaducidad.Focus();
-                return;
-            }
+            Insumo insumoSel = insumo;
+            Proveedor provSel = proveedor;
 
             // El código de lote y, si no se capturó, el de barras los genera la lógica al confirmar,
             // verificando que no se repitan (RF-01). La vista previa solo orienta al usuario.
@@ -791,7 +982,17 @@ namespace CapaPresentaciòn.Controles
 
             if (!resultado.Exito)
             {
-                MessageBox.Show(resultado.Mensaje, "No se pudo registrar la recepción", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                // Error de la lógica o de MySQL: se muestra en la barra, sin ventana emergente
+                if (resultado.Mensaje.Contains("código de barras", StringComparison.OrdinalIgnoreCase))
+                    MarcarErrorCampo(_txtCodigoBarras, "Revisa este código de barras.");
+                else if (resultado.Mensaje.Contains("costo unitario", StringComparison.OrdinalIgnoreCase))
+                    MarcarErrorCampo(_pnlCostoUnit, resultado.Mensaje);
+                else if (resultado.Mensaje.Contains("cantidad", StringComparison.OrdinalIgnoreCase))
+                    MarcarErrorCampo(_pnlCantidad, resultado.Mensaje);
+                else if (resultado.Mensaje.Contains("caducidad", StringComparison.OrdinalIgnoreCase))
+                    MarcarErrorCampo(_dtpCaducidad, resultado.Mensaje);
+
+                _lblResumenValidacion.Text = "⚠  No se registró: " + resultado.Mensaje.Replace("\r", " ").Replace("\n", " ");
                 return;
             }
 
@@ -844,6 +1045,9 @@ namespace CapaPresentaciòn.Controles
             _barraAcciones.Bounds = new Rectangle(margenX, yBarra, anchoUtil, altoBarraAcciones);
             _btnConfirmar.Location = new Point(anchoUtil - _btnConfirmar.Width - 16, (altoBarraAcciones - _btnConfirmar.Height) / 2);
             _btnCancelar.Location = new Point(_btnConfirmar.Left - _btnCancelar.Width - 12, (altoBarraAcciones - _btnCancelar.Height) / 2);
+            _lblResumenValidacion.Size = new Size(Math.Max(80, _btnCancelar.Left - 30), altoBarraAcciones - 12);
+
+            ReubicarErroresCampo();
         }
 
         private void AjustarControlesInternosFormulario(int anchoColumna, int xCol2)

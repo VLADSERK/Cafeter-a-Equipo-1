@@ -17,7 +17,8 @@ namespace CapaLogica
         AdministrarCatalogo,         // RF-04 / RF-05 · productos y recetas
         AdministrarInsumosProveedores, // RF-04 · altas de insumos y proveedores
         GenerarReportes,             // RF-10 / RIU-06 · reportes y dashboard
-        ConfigurarParametros         // RF-12
+        ConfigurarParametros,        // RF-12
+        AdministrarUsuarios          // RF-12 / Diseño 6.2 · credenciales y estado de cuentas
     }
 
     /// <summary>
@@ -47,7 +48,8 @@ namespace CapaLogica
             [Operacion.AdministrarCatalogo] = (SoloAdmin, "modificar productos y recetas"),
             [Operacion.AdministrarInsumosProveedores] = (SoloAdmin, "dar de alta insumos o proveedores"),
             [Operacion.GenerarReportes] = (SoloAdmin, "consultar reportes financieros"),
-            [Operacion.ConfigurarParametros] = (SoloAdmin, "modificar los parámetros globales")
+            [Operacion.ConfigurarParametros] = (SoloAdmin, "modificar los parámetros globales"),
+            [Operacion.AdministrarUsuarios] = (SoloAdmin, "administrar usuarios y credenciales")
         };
 
         public static bool EsAdministrador => Coincide(SesionActual.Rol, RolAdministrador);

@@ -25,6 +25,18 @@ namespace CapaEntidades
         public List<DetalleReceta> RecetaActiva { get; set; } = new();
     }
 
+    /// <summary>
+    /// Consumo de un insumo por cada unidad vendida de un producto, según su receta vigente,
+    /// ya convertido a la unidad del insumo, junto con la existencia actual de ese insumo.
+    /// </summary>
+    public class ConsumoRecetaInsumo
+    {
+        public int IdProducto { get; set; }
+        public int IdInsumo { get; set; }
+        public decimal ConsumoPorUnidad { get; set; }
+        public decimal Existencia { get; set; }
+    }
+
     public class UnidadMedida
     {
         public int IdUnidad { get; set; }
