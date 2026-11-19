@@ -23,7 +23,8 @@ CREATE TABLE `Usuario` (
   `usuario` varchar(50) UNIQUE NOT NULL,
   `contrasena_hash` varchar(255) NOT NULL,
   `nip_hash` varchar(255) NULL COMMENT 'Solo para rol Administrador (autorización de mermas, cancelaciones y config)',
-  `estado` ENUM ('Activo', 'Inactivo') NOT NULL DEFAULT 'Activo'
+  `estado` ENUM ('Activo', 'Inactivo') NOT NULL DEFAULT 'Activo',
+  `turno` ENUM ('Matutino', 'Vespertino') NULL COMMENT 'Turno del personal (RF-12, Configuración Global)'
 );
 
 CREATE TABLE `ConfiguracionGeneral` (

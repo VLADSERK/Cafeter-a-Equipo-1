@@ -43,22 +43,32 @@ namespace CapaPresentacion.Estilos
         /// Dibuja en una celda un círculo con el color del estado y su etiqueta textual
         /// (el texto evita depender solo del color).
         /// </summary>
+        private const int Diametro = 14;
+        private const int MargenIzquierdo = 10;
+        private static readonly Font FuenteCelda = new("Segoe UI", 9F, FontStyle.Bold);
+
+        /// <summary>Ancho del círculo más la etiqueta, desde el borde izquierdo de la celda.</summary>
+        public static int AnchoContenido(NivelSemaforo nivel)
+            => MargenIzquierdo + Diametro + 6 + TextRenderer.MeasureText(Etiqueta(nivel), FuenteCelda).Width;
+
         public static void PintarCelda(DataGridViewCellPaintingEventArgs e, NivelSemaforo nivel, bool centrar = false)
         {
-            e.PaintBackground(e.ClipBounds, (e.State & DataGridViewElementStates.Selected) != 0);
+            // Fondo, selección y también el borde de la celda: antes solo se pintaba el fondo
+            // y la línea de la cuadrícula quedaba cortada en esta columna.
+            e.Paint(e.ClipBounds, DataGridViewPaintParts.Background | DataGridViewPaintParts.SelectionBackground | DataGridViewPaintParts.Border);
 
             var g = e.Graphics!;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            const int diametro = 14;
+            const int diametro = Diametro;
             string texto = Etiqueta(nivel);
-            using var fuente = new Font("Segoe UI", 9F, FontStyle.Bold);
+            var fuente = FuenteCelda;
             Size medida = TextRenderer.MeasureText(texto, fuente);
 
             int anchoTotal = diametro + 8 + medida.Width;
             int x = centrar
                 ? e.CellBounds.X + (e.CellBounds.Width - anchoTotal) / 2
-                : e.CellBounds.X + 10;
+                : e.CellBounds.X + MargenIzquierdo;
             int y = e.CellBounds.Y + (e.CellBounds.Height - diametro) / 2;
 
             using (var relleno = new SolidBrush(Relleno(nivel)))

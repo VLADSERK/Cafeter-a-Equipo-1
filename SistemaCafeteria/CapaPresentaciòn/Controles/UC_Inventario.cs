@@ -317,8 +317,7 @@ namespace CapaPresentaciòn.Controles
                 Dock = DockStyle.Fill,
                 BackgroundColor = Color.White,
                 BorderStyle = BorderStyle.None,
-                CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
-                GridColor = TemaCafeteria.BordeSuave,
+                // Sin bordes de celda: las líneas por insumo/lote las dibuja TablaInventario.PintarSeparadores
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false,
@@ -376,7 +375,12 @@ namespace CapaPresentaciòn.Controles
             };
             _dgvInventario.Columns.Add(colKardex);
 
+            // Nombre del insumo y aviso de reabastecimiento parten renglón en vez de cortarse con "..."
+            TablaInventario.Configurar(_dgvInventario, "colInsumo", "colReabasto");
+
             _dgvInventario.CellPainting += DgvInventario_CellPainting;
+            _dgvInventario.RowPostPaint += (s, e) =>
+                TablaInventario.PintarSeparadores(_dgvInventario, e, MismoInsumo, "colLote");
             _dgvInventario.CellContentClick += (s, e) =>
             {
                 if (e.RowIndex >= 0 && e.ColumnIndex == _dgvInventario.Columns["colKardex"]!.Index)
@@ -498,12 +502,12 @@ namespace CapaPresentaciòn.Controles
 
                 if (primeraDelInsumo)
                 {
-                    row.Cells["colInsumo"].Style.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+                    row.Cells["colInsumo"].Style.Font = TablaInventario.FuenteInsumo;
                     if (res.AvisoReabastecimiento != null)
                     {
                         var c = row.Cells["colReabasto"];
                         c.Style.ForeColor = SemaforoVisual.Acento(res.Semaforo);
-                        c.Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                        c.Style.Font = TablaInventario.FuenteAviso;
                     }
                     else
                     {
@@ -512,15 +516,24 @@ namespace CapaPresentaciòn.Controles
                 }
 
                 var celdaLote = row.Cells["colLote"];
-                celdaLote.Style.Font = new Font("Consolas", 9.5F, FontStyle.Bold);
+                celdaLote.Style.Font = TablaInventario.FuenteLote;
                 if (fila.Lote == null)
                     celdaLote.Style.ForeColor = SemaforoVisual.Acento(NivelSemaforo.Blanco);
                 else if (fila.OrdenPeps == 1)
                     celdaLote.ToolTipText = "Siguiente lote en salir (PEPS: recepción más antigua)";
             }
 
+            TablaInventario.AjustarAnchosMinimos(_dgvInventario,
+                new Dictionary<string, int> { ["colSemaforo"] = TablaInventario.AnchoCeldaSemaforo() });
+
             _dgvInventario.ResumeLayout();
         }
+
+        /// <summary>True si las dos filas son lotes del mismo insumo (para dibujar el grupo).</summary>
+        private bool MismoInsumo(int filaA, int filaB)
+            => _dgvInventario.Rows[filaA].Tag is FilaInventario a
+               && _dgvInventario.Rows[filaB].Tag is FilaInventario b
+               && ReferenceEquals(a.Resumen, b.Resumen);
 
         private void DgvInventario_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
         {
@@ -554,7 +567,7 @@ namespace CapaPresentaciòn.Controles
             int yActual = _pnlTopBar.Height + 18;
 
             // 1. Fila de 4 tarjetas KPI (Verde, Amarillo, Rojo, Blanco)
-            int altoKpi = 108;
+            int altoKpi = 116;   // cabe la descripción en dos renglones
             int gapKpi = 14;
             _pnlKpis.Bounds = new Rectangle(margenX, yActual, anchoUtil, altoKpi);
 
@@ -565,6 +578,8 @@ namespace CapaPresentaciòn.Controles
                 int x = i * (anchoCardKpi + gapKpi);
                 int ancho = i == orden.Length - 1 ? anchoUtil - x : anchoCardKpi;
                 _tarjetas[orden[i]].Card.Bounds = new Rectangle(x, 0, ancho, altoKpi);
+                // La descripción ("≥ 50 % del stock máximo · ...") parte renglón dentro de la tarjeta
+                _tarjetas[orden[i]].Descripcion.MaximumSize = new Size(Math.Max(60, ancho - 34), 0);
             }
 
             yActual += altoKpi + 16;

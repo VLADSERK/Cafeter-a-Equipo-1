@@ -15,11 +15,12 @@ namespace CapaLogica
         // CONSULTAS (las puede usar cualquier usuario con sesión)
         // =====================================================================
 
-        public List<Categoria> ObtenerCategorias() => _datos.ObtenerCategorias();
+        public List<Categoria> ObtenerCategorias()
+            => OrdenAlfabetico.Por(_datos.ObtenerCategorias(), c => c.Nombre);
 
-        /// <summary>Productos para la pantalla de catálogo (Administrador).</summary>
+        /// <summary>Productos para la pantalla de catálogo (Administrador), en orden alfabético por nombre.</summary>
         public List<Producto> ObtenerProductos(bool soloActivos = false, int? idCategoria = null)
-            => _datos.ObtenerProductos(soloActivos, idCategoria);
+            => OrdenAlfabetico.Por(_datos.ObtenerProductos(soloActivos, idCategoria), p => p.Nombre);
 
         /// <summary>
         /// Productos que se pueden vender: activos y con receta vigente (para el Punto de Venta).
@@ -35,8 +36,13 @@ namespace CapaLogica
 
         public List<DetalleReceta> ObtenerDetalleReceta(int idVersionReceta) => _datos.ObtenerDetalleReceta(idVersionReceta);
 
-        /// <summary>Insumos activos para elegir ingredientes de una receta.</summary>
-        public List<Insumo> ObtenerInsumosParaReceta() => _inventarioDatos.ObtenerInsumosConStock();
+        /// <summary>Insumos activos para elegir ingredientes de una receta, en orden alfabético.</summary>
+        public List<Insumo> ObtenerInsumosParaReceta()
+            => OrdenAlfabetico.Por(_inventarioDatos.ObtenerInsumosConStock(), i => i.Nombre);
+
+        /// <summary>Ordena las líneas de una receta por el nombre del insumo (en el mismo objeto lista).</summary>
+        public static void OrdenarLineasReceta(List<DetalleReceta> lineas)
+            => lineas.Sort((a, b) => OrdenAlfabetico.Nombres.Compare(a.NombreInsumo, b.NombreInsumo));
 
         public List<UnidadMedida> ObtenerUnidadesMedida() => _inventarioDatos.ObtenerUnidadesMedida();
 

@@ -58,10 +58,7 @@ namespace CapaLogica
         {
             ExigirPermiso(Operacion.RegistrarRecepcion);
 
-            var comparador = StringComparer.Create(CultureInfo.GetCultureInfo("es-MX"), ignoreCase: true);
-            return _inventarioDatos.ObtenerInsumosConStock()
-                .OrderBy(i => i.Nombre, comparador)
-                .ToList();
+            return OrdenAlfabetico.Por(_inventarioDatos.ObtenerInsumosConStock(), i => i.Nombre);
         }
 
         /// <summary>

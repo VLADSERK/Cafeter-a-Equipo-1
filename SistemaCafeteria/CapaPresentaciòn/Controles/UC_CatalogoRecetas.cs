@@ -739,6 +739,10 @@ namespace CapaPresentaciòn.Controles.Admin
 
             _dgvReceta.Rows.Clear();
 
+            // Ingredientes en orden alfabético; se ordena la lista misma para que el botón
+            // "Quitar" de cada fila siga apuntando a su línea (mismo índice).
+            CatalogoNegocio.OrdenarLineasReceta(_recetaEdicion);
+
             decimal costoTotal = 0m;
             bool faltanCostos = false;
 

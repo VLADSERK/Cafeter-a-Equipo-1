@@ -334,9 +334,8 @@ namespace CapaPresentaciòn.Controles.Admin
                 ColumnHeadersHeight = 46,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
                 RowTemplate = { Height = 44 },
-                EnableHeadersVisualStyles = false,
-                GridColor = TemaCafeteria.BordeSuave,
-                CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal
+                EnableHeadersVisualStyles = false
+                // Sin bordes de celda: las líneas por insumo/lote las dibuja TablaInventario.PintarSeparadores
             };
 
             _dgvInventario.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
@@ -381,6 +380,12 @@ namespace CapaPresentaciòn.Controles.Admin
                 SortMode = DataGridViewColumnSortMode.NotSortable
             };
             _dgvInventario.Columns.Add(colHistorial);
+
+            // Insumo, aviso de reabastecimiento y proveedor parten renglón en vez de cortarse con "..."
+            TablaInventario.Configurar(_dgvInventario, "colInsumo", "colReabasto", "colProveedor");
+
+            _dgvInventario.RowPostPaint += (s, e) =>
+                TablaInventario.PintarSeparadores(_dgvInventario, e, MismoInsumo, "colLote");
 
             _dgvInventario.CellPainting += (s, e) =>
             {
@@ -487,12 +492,12 @@ namespace CapaPresentaciòn.Controles.Admin
 
                 if (primeraDelInsumo)
                 {
-                    row.Cells["colInsumo"].Style.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+                    row.Cells["colInsumo"].Style.Font = TablaInventario.FuenteInsumo;
                     var celdaAviso = row.Cells["colReabasto"];
                     if (res.AvisoReabastecimiento != null)
                     {
                         celdaAviso.Style.ForeColor = SemaforoVisual.Acento(res.Semaforo);
-                        celdaAviso.Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                        celdaAviso.Style.Font = TablaInventario.FuenteAviso;
                     }
                     else
                     {
@@ -511,8 +516,17 @@ namespace CapaPresentaciòn.Controles.Admin
                 }
             }
 
+            TablaInventario.AjustarAnchosMinimos(_dgvInventario,
+                new Dictionary<string, int> { ["colSemaforo"] = TablaInventario.AnchoCeldaSemaforo() });
+
             _dgvInventario.ResumeLayout();
         }
+
+        /// <summary>True si las dos filas son lotes del mismo insumo (para dibujar el grupo).</summary>
+        private bool MismoInsumo(int filaA, int filaB)
+            => _dgvInventario.Rows[filaA].Tag is FilaInventario a
+               && _dgvInventario.Rows[filaB].Tag is FilaInventario b
+               && ReferenceEquals(a.Resumen, b.Resumen);
 
         private void AbrirKardex(int rowIndex)
         {
@@ -569,7 +583,7 @@ namespace CapaPresentaciòn.Controles.Admin
 
             // 1. Fila de 4 tarjetas KPI (Verde, Amarillo, Rojo, Blanco)
             int yKpi = _pnlTopBar.Height + 16;
-            int altoKpi = 114;
+            int altoKpi = 120;   // cabe la descripción en dos renglones
             int gapKpi = 14;
             int anchoKpi = (anchoUtil - (gapKpi * 3)) / 4;
 
@@ -578,6 +592,8 @@ namespace CapaPresentaciòn.Controles.Admin
                 int x = margenX + i * (anchoKpi + gapKpi);
                 int ancho = i == Niveles.Length - 1 ? margenX + anchoUtil - x : anchoKpi;
                 _tarjetas[Niveles[i]].Card.Bounds = new Rectangle(x, yKpi, ancho, altoKpi);
+                // La descripción ("≥ 50 % del stock máximo · ...") parte renglón dentro de la tarjeta
+                _tarjetas[Niveles[i]].Descripcion.MaximumSize = new Size(Math.Max(60, ancho - 34), 0);
             }
 
             // 2. Barra de filtros y búsqueda

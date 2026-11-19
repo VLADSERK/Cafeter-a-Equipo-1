@@ -38,6 +38,61 @@ namespace CapaPresentaciòn.Controles
         private readonly Dictionary<int, (Label Estado, Button Agregar)> _controlesTarjeta = new();
         private readonly ToolTip _toolTip = new();
         private readonly Dictionary<string, Image> _cacheImagenes = new(StringComparer.OrdinalIgnoreCase);
+
+        // ---------------------------------------------------------------------
+        // Controles dinámicos reutilizables
+        // Antes la comanda y el catálogo se reconstruían completos con Controls.Clear(), que NO libera
+        // los controles: sus ventanas nativas quedaban vivas y al llegar a 10,000 objetos USER Windows
+        // lanzaba "Error al crear identificador de ventana". Ahora las filas y tarjetas se reutilizan y
+        // solo se liberan (Dispose diferido) las que se quitan o reemplazan.
+        // ---------------------------------------------------------------------
+
+        /// <summary>Controles de una línea de la comanda. Se identifica por producto, no por el objeto ItemComanda.</summary>
+        private sealed class FilaComanda
+        {
+            public required int IdProducto { get; init; }
+            public required Panel Fila { get; init; }
+            public required Label Nombre { get; init; }
+            public required Label PrecioUnitario { get; init; }
+            public required Button Menos { get; init; }
+            public required Label Cantidad { get; init; }
+            public required Button Mas { get; init; }
+            public required Label Importe { get; init; }
+            public required Button Borrar { get; init; }
+        }
+
+        /// <summary>Controles de una tarjeta del catálogo que cambian de tamaño al redimensionar.</summary>
+        private sealed class TarjetaProducto
+        {
+            public required PanelRedondeado Card { get; init; }
+            public required Panel PnlImagen { get; init; }
+            public required Label Nombre { get; init; }
+            public required Label Descripcion { get; init; }
+            public required Button Agregar { get; init; }
+        }
+
+        private readonly Dictionary<int, FilaComanda> _filasComanda = new();   // IdProducto → fila
+        private readonly List<TarjetaProducto> _tarjetas = new();
+        private readonly List<Control> _pendientesLiberar = new();
+        private bool _liberacionProgramada;
+
+        /// <summary>
+        /// Fuentes compartidas por filas y tarjetas (antes se creaba una Font nueva por control en
+        /// cada redibujo). Son estáticas: los controles no liberan la fuente que se les asigna.
+        /// </summary>
+        private static class Fuentes
+        {
+            public static readonly Font FilaNegrita = new("Segoe UI", 9.5F, FontStyle.Bold);
+            public static readonly Font FilaPrecio = new("Segoe UI", 8F);
+            public static readonly Font FilaBorrar = new("Segoe UI", 9F);
+
+            public static readonly Font TarjetaEstado = new("Segoe UI", 8F, FontStyle.Bold);
+            public static readonly Font TarjetaIcono = new("Segoe UI", 28F);
+            public static readonly Font TarjetaNombre = new("Segoe UI", 10.5F, FontStyle.Bold);
+            public static readonly Font TarjetaDescripcion = new("Segoe UI", 8.5F, FontStyle.Regular);
+            public static readonly Font TarjetaPrecio = new("Segoe UI", 11F, FontStyle.Bold);
+            public static readonly Font TarjetaBoton = new("Segoe UI", 9F, FontStyle.Bold);
+        }
         private string _categoriaActiva = CatCalientes;
         private string? _ultimoFolio;
 
@@ -73,7 +128,7 @@ namespace CapaPresentaciòn.Controles
         public UC_PuntoVenta()
         {
             InitializeComponent();
-            Disposed += (s, e) => _toolTip.Dispose();
+            Disposed += (s, e) => LiberarRecursos();
             ConfigurarInterfazPuntoVenta();
             RenderizarProductos();
             RefrescarComanda();
@@ -85,6 +140,70 @@ namespace CapaPresentaciòn.Controles
 
                 CargarCatalogo();
             };
+        }
+
+        // =====================================================================
+        // LIBERACIÓN DE CONTROLES Y RECURSOS
+        // =====================================================================
+
+        /// <summary>
+        /// Programa el Dispose de controles ya retirados de la pantalla. Es diferido (BeginInvoke) porque
+        /// el clic que los retira puede venir de un botón de esos mismos controles (p. ej. 🗑 de una fila).
+        /// </summary>
+        private void LiberarDespues(IEnumerable<Control> controles)
+        {
+            foreach (var c in controles)
+            {
+                QuitarToolTips(c);
+                _pendientesLiberar.Add(c);
+            }
+
+            if (_pendientesLiberar.Count == 0 || _liberacionProgramada)
+                return;
+
+            if (IsHandleCreated && !IsDisposed)
+            {
+                _liberacionProgramada = true;
+                BeginInvoke(new Action(LiberarPendientes));
+            }
+            else
+            {
+                LiberarPendientes();
+            }
+        }
+
+        private void LiberarPendientes()
+        {
+            _liberacionProgramada = false;
+            var lote = _pendientesLiberar.ToList();
+            _pendientesLiberar.Clear();
+            foreach (var c in lote)
+                c.Dispose();
+        }
+
+        /// <summary>El ToolTip guarda referencias a sus controles: se quitan antes de liberarlos.</summary>
+        private void QuitarToolTips(Control raiz)
+        {
+            _toolTip.SetToolTip(raiz, null);
+            foreach (Control hijo in raiz.Controls)
+                QuitarToolTips(hijo);
+        }
+
+        /// <summary>Al cerrar el Punto de Venta: controles pendientes, ToolTip e imágenes en caché.</summary>
+        private void LiberarRecursos()
+        {
+            LiberarPendientes();
+            _toolTip.Dispose();
+
+            // Los PictureBox ya se liberaron con el control (PictureBox no libera su Image), así que
+            // las imágenes compartidas de la caché se liberan aquí una sola vez.
+            foreach (var imagen in _cacheImagenes.Values)
+                imagen.Dispose();
+            _cacheImagenes.Clear();
+
+            _filasComanda.Clear();
+            _tarjetas.Clear();
+            _controlesTarjeta.Clear();
         }
 
         // =====================================================================
@@ -306,26 +425,61 @@ namespace CapaPresentaciòn.Controles
             }
         }
 
+        /// <summary>
+        /// Recrea las tarjetas de la categoría activa. Solo se usa cuando cambian los datos (categoría,
+        /// recarga del catálogo tras una venta); las tarjetas reemplazadas se liberan con Dispose diferido.
+        /// Al redimensionar se usa <see cref="ReacomodarTarjetas"/>, que no crea controles.
+        /// </summary>
         private void RenderizarProductos()
         {
             _flowProductos.SuspendLayout();
+
+            var anteriores = _flowProductos.Controls.Cast<Control>().ToList();
             _flowProductos.Controls.Clear();
             _controlesTarjeta.Clear();
+            _tarjetas.Clear();
+            LiberarDespues(anteriores);
 
             var filtrados = _catalogoCompleto.Where(p => p.NombreCategoria == _categoriaActiva).ToList();
             _lblBadgeContador.Text = $"{filtrados.Count} productos";
 
-            int anchoTarjeta = Math.Max(195, (_flowProductos.ClientSize.Width - 46) / 3);
-            if (_flowProductos.ClientSize.Width < 620)
-                anchoTarjeta = Math.Max(210, (_flowProductos.ClientSize.Width - 32) / 2);
-
+            int anchoTarjeta = CalcularAnchoTarjeta();
             foreach (var prod in filtrados)
             {
-                _flowProductos.Controls.Add(CrearTarjetaProducto(prod, anchoTarjeta));
+                var tarjeta = CrearTarjetaProducto(prod, anchoTarjeta);
+                _tarjetas.Add(tarjeta);
+                _flowProductos.Controls.Add(tarjeta.Card);
             }
 
             _flowProductos.ResumeLayout();
             ActualizarEstadoTarjetas();
+        }
+
+        private int CalcularAnchoTarjeta()
+        {
+            int ancho = Math.Max(195, (_flowProductos.ClientSize.Width - 46) / 3);
+            if (_flowProductos.ClientSize.Width < 620)
+                ancho = Math.Max(210, (_flowProductos.ClientSize.Width - 32) / 2);
+            return ancho;
+        }
+
+        /// <summary>Ajusta el ancho de las tarjetas existentes (Resize) sin crear ni destruir controles.</summary>
+        private void ReacomodarTarjetas()
+        {
+            int ancho = CalcularAnchoTarjeta();
+            if (_tarjetas.Count == 0 || _tarjetas[0].Card.Width == ancho)
+                return;
+
+            _flowProductos.SuspendLayout();
+            foreach (var t in _tarjetas)
+            {
+                t.Card.Width = ancho;
+                t.PnlImagen.Width = ancho - 20;
+                t.Nombre.Width = ancho - 24;
+                t.Descripcion.Width = ancho - 24;
+                t.Agregar.Left = ancho - 100;
+            }
+            _flowProductos.ResumeLayout();
         }
 
         // =====================================================================
@@ -380,7 +534,7 @@ namespace CapaPresentaciòn.Controles
         private bool PuedeAgregarUno(int idProducto)
             => _disponibilidad.RestantePara(idProducto, CantidadesComanda()) > 0;
 
-        private PanelRedondeado CrearTarjetaProducto(Ent.Producto prod, int ancho)
+        private TarjetaProducto CrearTarjetaProducto(Ent.Producto prod, int ancho)
         {
             PanelRedondeado card = new PanelRedondeado
             {
@@ -401,7 +555,7 @@ namespace CapaPresentaciòn.Controles
             Label lblDisponible = new Label
             {
                 Text = "Disponibles",
-                Font = new Font("Segoe UI", 8F, FontStyle.Bold),
+                Font = Fuentes.TarjetaEstado,
                 ForeColor = TemaCafeteria.SemaforoVerde,
                 BackColor = Color.White,
                 Location = new Point(8, 8),
@@ -426,7 +580,7 @@ namespace CapaPresentaciòn.Controles
                 Label lblIconoCentral = new Label
                 {
                     Text = prod.NombreCategoria == CatCalientes ? "☕" : prod.NombreCategoria == CatFrias ? "🥤" : "🥐",
-                    Font = new Font("Segoe UI", 28F),
+                    Font = Fuentes.TarjetaIcono,
                     ForeColor = TemaCafeteria.CafePrimario,
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleCenter
@@ -440,7 +594,7 @@ namespace CapaPresentaciòn.Controles
             Label lblNombre = new Label
             {
                 Text = prod.Nombre,
-                Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
+                Font = Fuentes.TarjetaNombre,
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(12, 122),
                 Size = new Size(ancho - 24, 22)
@@ -449,7 +603,7 @@ namespace CapaPresentaciòn.Controles
             Label lblDesc = new Label
             {
                 Text = prod.NombreCategoria,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
+                Font = Fuentes.TarjetaDescripcion,
                 ForeColor = TemaCafeteria.TextoSecundario,
                 Location = new Point(12, 144),
                 Size = new Size(ancho - 24, 28)
@@ -458,7 +612,7 @@ namespace CapaPresentaciòn.Controles
             Label lblPrecio = new Label
             {
                 Text = prod.Precio.ToString("C2", _culturaMxn),
-                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                Font = Fuentes.TarjetaPrecio,
                 ForeColor = TemaCafeteria.TextoOscuro,
                 Location = new Point(12, 182),
                 AutoSize = true
@@ -467,7 +621,7 @@ namespace CapaPresentaciòn.Controles
             Button btnAgregar = new Button
             {
                 Text = "+ Agregar",
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Font = Fuentes.TarjetaBoton,
                 BackColor = TemaCafeteria.CafePrimario,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -476,12 +630,20 @@ namespace CapaPresentaciòn.Controles
                 Cursor = Cursors.Hand
             };
             btnAgregar.FlatAppearance.BorderSize = 0;
-            btnAgregar.Click += (s, e) => AgregarProductoAComanda(prod);
+            int idProducto = prod.IdProducto;
+            btnAgregar.Click += (s, e) => AgregarProductoAComanda(idProducto);
 
             _controlesTarjeta[prod.IdProducto] = (lblDisponible, btnAgregar);
 
             card.Controls.AddRange(new Control[] { pnlImagen, lblNombre, lblDesc, lblPrecio, btnAgregar });
-            return card;
+            return new TarjetaProducto
+            {
+                Card = card,
+                PnlImagen = pnlImagen,
+                Nombre = lblNombre,
+                Descripcion = lblDesc,
+                Agregar = btnAgregar
+            };
         }
 
         /// <summary>
@@ -710,16 +872,27 @@ namespace CapaPresentaciòn.Controles
         // COMANDA
         // =====================================================================
 
-        private void AgregarProductoAComanda(Ent.Producto prod)
+        /// <summary>
+        /// Agrega una unidad del producto. Recibe el id y toma el producto vigente del catálogo cargado,
+        /// para no depender de una referencia que haya quedado obsoleta tras recargar el catálogo.
+        /// </summary>
+        private void AgregarProductoAComanda(int idProducto)
         {
-            // El botón ya se deshabilita al llegar al máximo; esta revisión cubre clics rápidos
-            if (!PuedeAgregarUno(prod.IdProducto))
+            var prod = _catalogoCompleto.FirstOrDefault(p => p.IdProducto == idProducto);
+            if (prod == null)
             {
                 ActualizarEstadoTarjetas();
                 return;
             }
 
-            var existente = _comandaActual.FirstOrDefault(i => i.Producto.IdProducto == prod.IdProducto);
+            // El botón ya se deshabilita al llegar al máximo; esta revisión cubre clics rápidos
+            if (!PuedeAgregarUno(idProducto))
+            {
+                ActualizarEstadoTarjetas();
+                return;
+            }
+
+            var existente = BuscarItem(idProducto);
             if (existente != null)
             {
                 existente.Cantidad++;
@@ -731,10 +904,44 @@ namespace CapaPresentaciòn.Controles
             RefrescarComanda();
         }
 
+        /// <summary>Línea vigente de la comanda para el producto (null si ya no está).</summary>
+        private ItemComanda? BuscarItem(int idProducto)
+            => _comandaActual.FirstOrDefault(i => i.Producto.IdProducto == idProducto);
+
+        private void QuitarUnidad(int idProducto)
+        {
+            var item = BuscarItem(idProducto);
+            if (item != null)
+            {
+                if (item.Cantidad > 1) item.Cantidad--;
+                else _comandaActual.Remove(item);
+            }
+            RefrescarComanda();
+        }
+
+        private void AgregarUnidad(int idProducto)
+        {
+            var item = BuscarItem(idProducto);
+            if (item != null && PuedeAgregarUno(idProducto))
+                item.Cantidad++;
+            RefrescarComanda();
+        }
+
+        private void QuitarLinea(int idProducto)
+        {
+            var item = BuscarItem(idProducto);
+            if (item != null)
+                _comandaActual.Remove(item);
+            RefrescarComanda();
+        }
+
+        /// <summary>
+        /// Sincroniza las filas con la comanda sin reconstruirlas: actualiza las existentes, crea solo
+        /// las de productos nuevos, libera (Dispose diferido) las de productos quitados y respeta el orden.
+        /// </summary>
         private void RefrescarComanda()
         {
             _flowComanda.SuspendLayout();
-            _flowComanda.Controls.Clear();
 
             int anchoFila = Math.Max(330, _flowComanda.ClientSize.Width - 10);
 
@@ -752,143 +959,192 @@ namespace CapaPresentaciòn.Controles
 
             var cantidades = CantidadesComanda();
 
-            foreach (var item in _comandaActual.ToList())
+            // 1. Quitar (y liberar después) las filas de productos que ya no están en la comanda
+            var idsEnComanda = new HashSet<int>(_comandaActual.Select(i => i.Producto.IdProducto));
+            var retiradas = new List<Control>();
+            foreach (int id in _filasComanda.Keys.Where(id => !idsEnComanda.Contains(id)).ToList())
             {
-                int maximo = _disponibilidad.MaximoPara(item.Producto.IdProducto, cantidades);
-                bool enMaximo = item.Cantidad >= maximo;
+                var filaQuitada = _filasComanda[id];
+                _flowComanda.Controls.Remove(filaQuitada.Fila);
+                _filasComanda.Remove(id);
+                retiradas.Add(filaQuitada.Fila);
+            }
 
-                Panel fila = new Panel
-                {
-                    Size = new Size(anchoFila, 54),
-                    Margin = new Padding(0, 0, 0, 6),
-                    BackColor = Color.White
-                };
-                fila.Paint += (s, e) =>
-                {
-                    using var pen = new Pen(TemaCafeteria.BordeSuave, 1);
-                    e.Graphics.DrawLine(pen, 4, fila.Height - 1, fila.Width - 4, fila.Height - 1);
-                };
+            // 2. Actualizar las existentes y crear solo las nuevas, en el orden de la comanda
+            for (int indice = 0; indice < _comandaActual.Count; indice++)
+            {
+                var item = _comandaActual[indice];
+                int idProducto = item.Producto.IdProducto;
 
-                Label lblNombre = new Label
+                if (!_filasComanda.TryGetValue(idProducto, out var fila))
                 {
-                    Text = item.Producto.Nombre,
-                    Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                    ForeColor = TemaCafeteria.TextoOscuro,
-                    Location = new Point(6, 6),
-                    Size = new Size(Math.Max(60, xMenos - 10), 20),
-                    AutoEllipsis = true
-                };
+                    fila = CrearFilaComanda(idProducto);
+                    _filasComanda[idProducto] = fila;
+                    _flowComanda.Controls.Add(fila.Fila);
+                }
 
-                Label lblPrecioUnit = new Label
-                {
-                    Text = enMaximo
-                        ? $"{item.Producto.Precio.ToString("C2", _culturaMxn)} c/u · máx. {maximo}"
-                        : $"{item.Producto.Precio.ToString("C2", _culturaMxn)} c/u",
-                    Font = new Font("Segoe UI", 8F),
-                    ForeColor = enMaximo ? ColorTranslator.FromHtml("#B26A00") : TemaCafeteria.TextoSecundario,
-                    Location = new Point(6, 26),
-                    AutoSize = true
-                };
+                int maximo = _disponibilidad.MaximoPara(idProducto, cantidades);
+                ActualizarFilaComanda(fila, item, maximo, anchoFila, xMenos, xCantidad, anchoCantidad, xMas, xImporte, xBorrar);
 
-                Button btnMenos = new Button
-                {
-                    Text = "−",
-                    Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                    BackColor = TemaCafeteria.FondoCrema,
-                    FlatStyle = FlatStyle.Flat,
-                    Size = new Size(26, 26),
-                    Location = new Point(xMenos, 12),
-                    Cursor = Cursors.Hand
-                };
-                btnMenos.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
-                btnMenos.Click += (s, e) =>
-                {
-                    if (item.Cantidad > 1) item.Cantidad--;
-                    else _comandaActual.Remove(item);
-                    RefrescarComanda();
-                };
-
-                Label lblCant = new Label
-                {
-                    Text = item.Cantidad.ToString(CultureInfo.InvariantCulture),
-                    Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                    Location = new Point(xCantidad, 12),
-                    Size = new Size(anchoCantidad, 26),
-                    AutoSize = false,
-                    AutoEllipsis = false,
-                    UseCompatibleTextRendering = false,
-                    TextAlign = ContentAlignment.MiddleCenter
-                };
-
-                Button btnMas = new Button
-                {
-                    Text = "+",
-                    Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                    BackColor = TemaCafeteria.FondoCrema,
-                    FlatStyle = FlatStyle.Flat,
-                    Size = new Size(26, 26),
-                    Location = new Point(xMas, 12),
-                    Cursor = enMaximo ? Cursors.Default : Cursors.Hand,
-                    Enabled = !enMaximo
-                };
-                btnMas.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
-                _toolTip.SetToolTip(btnMas, enMaximo
-                    ? (maximo >= _disponibilidad.LimitePorProducto
-                        ? $"Máximo {_disponibilidad.LimitePorProducto} unidades por producto en cada venta."
-                        : "Los insumos disponibles no alcanzan para más unidades.")
-                    : "Agregar una unidad");
-                btnMas.Click += (s, e) =>
-                {
-                    if (!PuedeAgregarUno(item.Producto.IdProducto))
-                    {
-                        RefrescarComanda();
-                        return;
-                    }
-                    item.Cantidad++;
-                    RefrescarComanda();
-                };
-
-                Button btnBorrar = new Button
-                {
-                    Text = "🗑",
-                    Font = new Font("Segoe UI", 9F),
-                    ForeColor = TemaCafeteria.TextoSecundario,
-                    BackColor = Color.Transparent,
-                    FlatStyle = FlatStyle.Flat,
-                    Size = new Size(28, 28),
-                    Location = new Point(xBorrar, 11),
-                    Cursor = Cursors.Hand
-                };
-                btnBorrar.FlatAppearance.BorderSize = 0;
-                btnBorrar.Click += (s, e) =>
-                {
-                    _comandaActual.Remove(item);
-                    RefrescarComanda();
-                };
-
-                Label lblImporte = new Label
-                {
-                    Text = item.Importe.ToString("C2", _culturaMxn),
-                    Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                    ForeColor = TemaCafeteria.TextoOscuro,
-                    Location = new Point(xImporte, 15),
-                    Size = new Size(72, 22),
-                    TextAlign = ContentAlignment.MiddleRight
-                };
-
-                fila.Controls.AddRange(new Control[]
-                {
-                    lblNombre, lblPrecioUnit, btnMenos, lblCant, btnMas, lblImporte, btnBorrar
-                });
-                _flowComanda.Controls.Add(fila);
+                if (_flowComanda.Controls.GetChildIndex(fila.Fila) != indice)
+                    _flowComanda.Controls.SetChildIndex(fila.Fila, indice);
             }
 
             _flowComanda.ResumeLayout();
+            LiberarDespues(retiradas);
 
             int totalArticulos = _comandaActual.Sum(i => i.Cantidad);
             _lblBadgeArticulos.Text = $"{totalArticulos} {(totalArticulos == 1 ? "artículo" : "artículos")}";
             ActualizarTotalesYCambio();
             ActualizarEstadoTarjetas();
+        }
+
+        /// <summary>
+        /// Crea una sola vez los controles de la línea de un producto (mismo aspecto que antes).
+        /// Los eventos usan el IdProducto y consultan _comandaActual, nunca un ItemComanda capturado.
+        /// </summary>
+        private FilaComanda CrearFilaComanda(int idProducto)
+        {
+            Panel panel = new Panel
+            {
+                Height = 54,
+                Margin = new Padding(0, 0, 0, 6),
+                BackColor = Color.White
+            };
+            panel.Paint += (s, e) =>
+            {
+                if (s is not Panel p) return;
+                using var pen = new Pen(TemaCafeteria.BordeSuave, 1);
+                e.Graphics.DrawLine(pen, 4, p.Height - 1, p.Width - 4, p.Height - 1);
+            };
+
+            Label lblNombre = new Label
+            {
+                Font = Fuentes.FilaNegrita,
+                ForeColor = TemaCafeteria.TextoOscuro,
+                Location = new Point(6, 6),
+                Height = 20,
+                AutoEllipsis = true
+            };
+
+            Label lblPrecioUnit = new Label
+            {
+                Font = Fuentes.FilaPrecio,
+                Location = new Point(6, 26),
+                AutoSize = true
+            };
+
+            Button btnMenos = new Button
+            {
+                Text = "−",
+                Font = Fuentes.FilaNegrita,
+                BackColor = TemaCafeteria.FondoCrema,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(26, 26),
+                Cursor = Cursors.Hand
+            };
+            btnMenos.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
+            btnMenos.Click += (s, e) => QuitarUnidad(idProducto);
+
+            Label lblCant = new Label
+            {
+                Font = Fuentes.FilaNegrita,
+                AutoSize = false,
+                AutoEllipsis = false,
+                UseCompatibleTextRendering = false,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+
+            Button btnMas = new Button
+            {
+                Text = "+",
+                Font = Fuentes.FilaNegrita,
+                BackColor = TemaCafeteria.FondoCrema,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(26, 26)
+            };
+            btnMas.FlatAppearance.BorderColor = TemaCafeteria.BordeSuave;
+            btnMas.Click += (s, e) => AgregarUnidad(idProducto);
+
+            Button btnBorrar = new Button
+            {
+                Text = "🗑",
+                Font = Fuentes.FilaBorrar,
+                ForeColor = TemaCafeteria.TextoSecundario,
+                BackColor = Color.Transparent,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(28, 28),
+                Cursor = Cursors.Hand
+            };
+            btnBorrar.FlatAppearance.BorderSize = 0;
+            btnBorrar.Click += (s, e) => QuitarLinea(idProducto);
+
+            Label lblImporte = new Label
+            {
+                Font = Fuentes.FilaNegrita,
+                ForeColor = TemaCafeteria.TextoOscuro,
+                Size = new Size(72, 22),
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
+            panel.Controls.AddRange(new Control[]
+            {
+                lblNombre, lblPrecioUnit, btnMenos, lblCant, btnMas, lblImporte, btnBorrar
+            });
+
+            return new FilaComanda
+            {
+                IdProducto = idProducto,
+                Fila = panel,
+                Nombre = lblNombre,
+                PrecioUnitario = lblPrecioUnit,
+                Menos = btnMenos,
+                Cantidad = lblCant,
+                Mas = btnMas,
+                Importe = lblImporte,
+                Borrar = btnBorrar
+            };
+        }
+
+        /// <summary>Pone en la fila los datos vigentes de la línea y la acomoda al ancho actual.</summary>
+        private void ActualizarFilaComanda(FilaComanda fila, ItemComanda item, int maximo,
+            int anchoFila, int xMenos, int xCantidad, int anchoCantidad, int xMas, int xImporte, int xBorrar)
+        {
+            bool enMaximo = item.Cantidad >= maximo;
+            string precio = item.Producto.Precio.ToString("C2", _culturaMxn);
+
+            // Posiciones calculadas desde la derecha (cambian al redimensionar)
+            fila.Fila.Width = anchoFila;
+            fila.Nombre.Width = Math.Max(60, xMenos - 10);
+            fila.Menos.Location = new Point(xMenos, 12);
+            fila.Cantidad.Bounds = new Rectangle(xCantidad, 12, anchoCantidad, 26);
+            fila.Mas.Location = new Point(xMas, 12);
+            fila.Importe.Location = new Point(xImporte, 15);
+            fila.Borrar.Location = new Point(xBorrar, 11);
+
+            // Datos de la línea (se asignan solo si cambian, para no provocar repintados de más)
+            AsignarTexto(fila.Nombre, item.Producto.Nombre);
+            AsignarTexto(fila.PrecioUnitario, enMaximo ? $"{precio} c/u · máx. {maximo}" : $"{precio} c/u");
+            fila.PrecioUnitario.ForeColor = enMaximo ? ColorTranslator.FromHtml("#B26A00") : TemaCafeteria.TextoSecundario;
+            AsignarTexto(fila.Cantidad, item.Cantidad.ToString(CultureInfo.InvariantCulture));
+            AsignarTexto(fila.Importe, item.Importe.ToString("C2", _culturaMxn));
+
+            fila.Mas.Enabled = !enMaximo;
+            fila.Mas.Cursor = enMaximo ? Cursors.Default : Cursors.Hand;
+
+            string ayuda = enMaximo
+                ? (maximo >= _disponibilidad.LimitePorProducto
+                    ? $"Máximo {_disponibilidad.LimitePorProducto} unidades por producto en cada venta."
+                    : "Los insumos disponibles no alcanzan para más unidades.")
+                : "Agregar una unidad";
+            if (_toolTip.GetToolTip(fila.Mas) != ayuda)
+                _toolTip.SetToolTip(fila.Mas, ayuda);
+        }
+
+        private static void AsignarTexto(Control control, string texto)
+        {
+            if (control.Text != texto)
+                control.Text = texto;
         }
 
         private void ActualizarTotalesYCambio()
@@ -1031,7 +1287,7 @@ namespace CapaPresentaciòn.Controles
             _btnTabReposteria.Bounds = new Rectangle(11 + (anchoTab * 2), 5, anchoTab, 36);
 
             _flowProductos.Size = new Size(anchoIzq, _pnlIzquierdo.Height - 116);
-            RenderizarProductos();
+            ReacomodarTarjetas();   // solo cambia tamaños: ya no recrea las tarjetas en cada Resize
 
             // 3. Ajustar controles internos de la comanda y cobro (Monto recibido + MXN + Cambio)
             _lblBadgeArticulos.Location = new Point(anchoDerecho - _lblBadgeArticulos.Width - 20, 38);

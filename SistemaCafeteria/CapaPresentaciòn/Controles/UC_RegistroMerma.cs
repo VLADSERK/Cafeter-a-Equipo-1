@@ -520,7 +520,8 @@ namespace CapaPresentaciòn.Controles
                 {
                     new Insumo { IdInsumo = 0, Nombre = "Seleccionar insumo..." }
                 };
-                listaCombo.AddRange(_resumenInventario.Select(r => r.Insumo));
+                // El resumen viene por urgencia del semáforo; en el selector se listan en orden alfabético
+                listaCombo.AddRange(OrdenAlfabetico.Por(_resumenInventario.Select(r => r.Insumo), i => i.Nombre));
 
                 _cmbInsumo.DataSource = null;
                 _cmbInsumo.DisplayMember = "Nombre";

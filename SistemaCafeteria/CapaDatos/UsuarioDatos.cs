@@ -204,6 +204,108 @@ namespace CapaDatos
             return cmd.ExecuteNonQuery() > 0;
         }
 
+        // =====================================================================
+        // TURNO (Matutino / Vespertino · IS2.sql y Migracion_03)
+        // Se consulta aparte del SELECT principal para que el inicio de sesión no dependa
+        // de la columna. Si una base anterior no la tiene, se crea una sola vez (idempotente).
+        // =====================================================================
+
+        private static readonly object CandadoTurno = new();
+        private static bool _columnaTurnoVerificada;
+
+        /// <summary>Crea Usuario.turno como ENUM('Matutino','Vespertino') si la base todavía no la tiene.</summary>
+        public void AsegurarColumnaTurno()
+        {
+            if (_columnaTurnoVerificada)
+                return;
+
+            lock (CandadoTurno)
+            {
+                if (_columnaTurnoVerificada)
+                    return;
+
+                const string sqlExiste = @"
+                    SELECT COUNT(*)
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'Usuario'
+                      AND COLUMN_NAME = 'turno';";
+
+                const string sqlCrear = @"
+                    ALTER TABLE Usuario
+                    ADD COLUMN turno ENUM('Matutino', 'Vespertino') NULL
+                    COMMENT 'Turno del personal (RF-12, Configuración Global)' AFTER estado;";
+
+                using var conn = ConexionMySql.ObtenerConexion();
+                using (var cmd = new MySqlCommand(sqlExiste, conn))
+                {
+                    if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+                    {
+                        using var alter = new MySqlCommand(sqlCrear, conn);
+                        alter.ExecuteNonQuery();
+                    }
+                }
+
+                _columnaTurnoVerificada = true;
+            }
+        }
+
+        public string? ObtenerTurno(int idUsuario)
+        {
+            AsegurarColumnaTurno();
+            const string sql = "SELECT turno FROM Usuario WHERE id_usuario = @id;";
+
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@id", idUsuario);
+            object? valor = cmd.ExecuteScalar();
+            return valor == null || valor == DBNull.Value ? null : Convert.ToString(valor);
+        }
+
+        /// <summary>
+        /// Actualiza en un solo UPDATE (atómico) los datos de una cuenta: nombre y usuario siempre;
+        /// el hash de contraseña solo si se indica; el turno solo si <paramref name="actualizarTurno"/>.
+        /// </summary>
+        public bool ActualizarCuenta(int idUsuario, string nombre, string nombreUsuario,
+            string? contrasenaHash, bool actualizarTurno, string? turno)
+        {
+            if (actualizarTurno)
+                AsegurarColumnaTurno();
+
+            var sets = new List<string> { "nombre = @nombre", "usuario = @usuario" };
+            if (contrasenaHash != null) sets.Add("contrasena_hash = @hash");
+            if (actualizarTurno) sets.Add("turno = @turno");
+
+            string sql = $"UPDATE Usuario SET {string.Join(", ", sets)} WHERE id_usuario = @id;";
+
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@nombre", nombre.Trim());
+            cmd.Parameters.AddWithValue("@usuario", nombreUsuario.Trim());
+            if (contrasenaHash != null) cmd.Parameters.AddWithValue("@hash", contrasenaHash);
+            if (actualizarTurno) cmd.Parameters.AddWithValue("@turno", (object?)turno ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@id", idUsuario);
+            return cmd.ExecuteNonQuery() > 0;
+        }
+
+        /// <summary>Actualiza en un solo UPDATE la contraseña y/o el NIP (los que no sean null).</summary>
+        public bool ActualizarCredenciales(int idUsuario, string? contrasenaHash, string? nipHash)
+        {
+            var sets = new List<string>();
+            if (contrasenaHash != null) sets.Add("contrasena_hash = @hash");
+            if (nipHash != null) sets.Add("nip_hash = @nip");
+            if (sets.Count == 0) return false;
+
+            string sql = $"UPDATE Usuario SET {string.Join(", ", sets)} WHERE id_usuario = @id;";
+
+            using var conn = ConexionMySql.ObtenerConexion();
+            using var cmd = new MySqlCommand(sql, conn);
+            if (contrasenaHash != null) cmd.Parameters.AddWithValue("@hash", contrasenaHash);
+            if (nipHash != null) cmd.Parameters.AddWithValue("@nip", nipHash);
+            cmd.Parameters.AddWithValue("@id", idUsuario);
+            return cmd.ExecuteNonQuery() > 0;
+        }
+
         private static Usuario Mapear(MySqlDataReader reader) => new Usuario
         {
             IdUsuario = reader.GetInt32("id_usuario"),
